@@ -12,10 +12,12 @@ Files: `index.html` (the whole app) · `sw.js` (offline cache) · `manifest.json
    automatically as you add categories in the back office).
 2. Tap a category → its items with prices → tap an item → enter **weight** or **$ amount**
    (converts both ways at the set price).
-3. Green **CHARGE** bar shows the running ticket. Tap it → review lines → take payment:
-   **CASH**, **ECOCASH**, or **SWIPE** (card machine).
+3. Keep tapping items — every line lands on the same ticket (use ‹ back to switch
+   categories). Green **CHARGE** bar shows the running ticket. Tap it → review lines →
+   take payment: **CASH**, **ECOCASH**, or **SWIPE** (card machine).
 4. Green **✓ confirmation screen** with the amount and payment method (plus a beep and
-   vibration on the phone), then back to categories for the next customer.
+   vibration on the phone) and a **PRINT RECEIPT** button, then back to categories for
+   the next customer. One ticket = one sale = one receipt, however many items are on it.
 
 ## Back office (the backend)
 
@@ -30,7 +32,28 @@ Android app shell.
 - **Items** — add/edit/delete product lines, prices, units, categories. Typing a new
   category name creates a new tile on the sell screen. Names must match the Excel
   workbook's Products sheet EXACTLY; prices = workbook selling price (cost × 1.38).
-- **Settings** — change PIN, backup/restore all data (JSON), lock the office.
+- **Settings** — change PIN, receipt header/footer + printer setup, backup/restore all
+  data (JSON), lock the office.
+
+## Receipts & thermal printing
+
+Every sale card in Reports has a **PRINT** button (reprints work too), and the green
+confirmation screen has **PRINT RECEIPT**. Receipts are 58 mm / 32-column format with
+the shop name, date/time, sale number, every line (kg × price), total and payment
+method — set the header and footer text in Settings → Receipts.
+
+Three printer modes in Settings → Receipts:
+
+- **No printer (default)** — the print button opens the Android share sheet with the
+  receipt text; send it to WhatsApp or any printer app.
+- **Bluetooth thermal printer (direct)** — for Bluetooth-LE ESC/POS printers (most
+  cheap 58 mm ones sold as "BLE" or "app printing"). Tap **Choose printer** once, then
+  **Test print**. No extra app needed.
+- **RawBT print app** — install the free RawBT app from the Play Store, connect the
+  printer inside RawBT (works with classic Bluetooth, USB, even some WiFi models), and
+  the POS hands each receipt to it. Use this if the direct option can't see your printer.
+
+There is also a **Print automatically after every sale** switch once a printer is set up.
 
 ## Daily close (feeds the Excel control)
 
@@ -72,6 +95,5 @@ version in the background, the second one runs it.
 
 ## Known limits (deliberate, for now)
 
-- No receipt printing (possible later via Bluetooth ESC/POS printer).
 - No multi-device sync.
 - Not ZIMRA-fiscalised — fine until VAT registration (~Feb–Mar 2027); revisit then.

@@ -89,6 +89,8 @@
   #done .amt { font-size:42px; font-weight:bold; }
   #done .how { font-size:18px; opacity:.95; margin-top:6px; }
   #done .msg { font-size:14px; opacity:.85; margin-top:16px; }
+  #done .prbtn { margin-top:22px; background:#fff; color:var(--greend); border:0;
+                 border-radius:10px; padding:14px 30px; font-size:16px; font-weight:bold; }
   /* office */
   .subnav { display:flex; gap:6px; margin-bottom:10px; }
   .subnav button { flex:1; padding:10px 0; border:1px solid #b0bec5; background:#fff;
@@ -188,6 +190,7 @@
   <div class="circ">✓</div>
   <div class="amt" id="d-amt"></div>
   <div class="how" id="d-how"></div>
+  <button class="prbtn" onclick="event.stopPropagation();printLast()">🖨 PRINT RECEIPT</button>
   <div class="msg">Sale recorded — tap to continue</div>
 </div>
 <div id="toast"></div>
@@ -215,6 +218,10 @@ let sales = load('mc_sales', []);
 let ticket = [], tab = 'sell', view = 'cats', selCat = null;
 let office = 'reports', pinOK = false, cur = null, mode = 'kg';
 let repFrom = today(), repTo = today();
+let shop = load('mc_shop', { name:'Meat Centre', line2:'', footer:'Thank you, come again!',
+                             printer:'off', auto:false });
+let lastSaleId = null;
+function saveShop(){ localStorage.setItem('mc_shop', JSON.stringify(shop)); }
 
 function load(k, d){ try { return JSON.parse(localStorage.getItem(k)) || d; } catch(e){ return d; } }
 function save(){ localStorage.setItem('mc_products', JSON.stringify(products));
@@ -317,9 +324,11 @@ function addLine(){ const v = parseFloat(document.getElementById('qty').value);
 function closeModal(){ document.getElementById('modal').classList.remove('open'); }
 function pay(how){ if (!ticket.length) return;
   const total = round2(ticket.reduce((s,l)=>s+l.amt,0));
-  sales.push({id:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
-              lines:ticket, pay:how, total, void:false});
+  const rec = {id:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+               lines:ticket, pay:how, total, void:false};
+  sales.push(rec); lastSaleId = rec.id;
   ticket = []; view = 'cats'; save(); render(); showDone(total, how);
+  if (shop.auto && shop.printer !== 'off') printSale(rec.id);
 }
 function showDone(total, how){
   document.getElementById('d-amt').textContent = fmt(total);
@@ -331,9 +340,102 @@ function showDone(total, how){
     o.frequency.value = 880; g.gain.value = .12;
     o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + .15);
   } catch(e){}
-  clearTimeout(showDone._h); showDone._h = setTimeout(hideDone, 1800);
+  clearTimeout(showDone._h); showDone._h = setTimeout(hideDone, 4000);
 }
 function hideDone(){ document.getElementById('done').classList.remove('open'); }
+
+// ---------------- receipts & printing ----------------
+const RW = 32;                                   // characters per line on a 58 mm printer
+function rPad(l, r){ l = String(l); r = String(r);
+  if (l.length > RW - r.length - 1) l = l.slice(0, RW - r.length - 1);
+  return l + ' '.repeat(RW - l.length - r.length) + r; }
+function rCenter(s){ s = String(s).slice(0, RW);
+  return ' '.repeat(Math.floor((RW - s.length) / 2)) + s; }
+function receiptText(s){
+  const div = '-'.repeat(RW), L = [];
+  L.push(rCenter(shop.name.toUpperCase()));
+  if (shop.line2) L.push(rCenter(shop.line2));
+  L.push(div);
+  L.push(rPad(s.date + ' ' + s.time, '#' + String(s.id).slice(-6)));
+  L.push(div);
+  for (const l of s.lines){
+    L.push(l.name.slice(0, RW));
+    L.push(rPad('  ' + l.kg.toFixed(3) + ' ' + l.unit + ' @ ' + fmt(l.price), fmt(l.amt)));
+  }
+  L.push(div);
+  L.push(rPad('TOTAL', fmt(s.total)));
+  L.push('Paid: ' + s.pay + (s.void ? '  ** VOIDED **' : ''));
+  L.push(div);
+  if (shop.footer) L.push(rCenter(shop.footer));
+  return L.join('\n');
+}
+function printLast(){ clearTimeout(showDone._h);
+  if (lastSaleId) printSale(lastSaleId); }
+function printSale(idOrSale){
+  const s = typeof idOrSale === 'object' ? idOrSale : sales.find(x => x.id === idOrSale);
+  if (!s) return;
+  const txt = receiptText(s);
+  if (shop.printer === 'bt') btPrint(txt);
+  else if (shop.printer === 'rawbt') rawbtPrint(txt);
+  else shareTxt(txt);
+}
+function testPrint(){ printSale({ id:Date.now(), date:today(),
+  time:new Date().toTimeString().slice(0,5), pay:'Cash', total:5, void:false,
+  lines:[{name:'Test item', unit:'kg', kg:1, price:5, amt:5}] }); }
+function shareTxt(txt){
+  if (navigator.share) navigator.share({title:'Receipt', text:txt}).catch(()=>{});
+  else if (navigator.clipboard) navigator.clipboard.writeText(txt)
+    .then(()=>toast('Receipt copied — paste it anywhere'), ()=>toast('Could not copy', true));
+  else toast('Sharing not available on this device', true);
+}
+// RawBT app (Play Store) — takes the text and drives classic-Bluetooth/USB printers
+function rawbtPrint(txt){
+  location.href = 'intent:' + encodeURIComponent(txt + '\n\n\n') +
+    '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+}
+// Direct Web-Bluetooth ESC/POS (Bluetooth-LE printers)
+const BT_SERVICES = ['000018f0-0000-1000-8000-00805f9b34fb',
+  'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+  '0000ff00-0000-1000-8000-00805f9b34fb', '0000ffe0-0000-1000-8000-00805f9b34fb'];
+let btDev = null, btChar = null;
+async function btPick(){
+  if (!navigator.bluetooth){ toast('Bluetooth not available in this browser', true); return; }
+  try {
+    btDev = await navigator.bluetooth.requestDevice(
+      { acceptAllDevices:true, optionalServices:BT_SERVICES });
+    btChar = null;
+    toast('Printer selected: ' + (btDev.name || 'unnamed device'));
+  } catch(e){ /* user closed the picker */ }
+}
+async function btEnsure(){
+  if (!btDev) await btPick();
+  if (!btDev) throw new Error('no printer chosen');
+  if (btChar && btDev.gatt.connected) return;
+  const g = await btDev.gatt.connect();
+  for (const uuid of BT_SERVICES){
+    try { const svc = await g.getPrimaryService(uuid);
+      const chars = await svc.getCharacteristics();
+      btChar = chars.find(c => c.properties.write || c.properties.writeWithoutResponse);
+      if (btChar) return;
+    } catch(e){}
+  }
+  throw new Error('printer service not found');
+}
+async function btPrint(txt){
+  try {
+    await btEnsure();
+    const enc = new TextEncoder();
+    const bytes = new Uint8Array([0x1b, 0x40,                    // ESC @ init
+      ...enc.encode(txt + '\n\n\n\n'), 0x1d, 0x56, 0x42, 0x00]); // GS V partial cut
+    for (let i = 0; i < bytes.length; i += 100){
+      const chunk = bytes.slice(i, i + 100);
+      if (btChar.properties.writeWithoutResponse) await btChar.writeValueWithoutResponse(chunk);
+      else await btChar.writeValue(chunk);
+      await new Promise(r => setTimeout(r, 20));
+    }
+    toast('Receipt sent to printer');
+  } catch(e){ toast('Print failed — ' + e.message, true); }
+}
 
 // ---------------- PIN pad (no window.prompt — works in APK/WebView) ----------------
 let pinBuf = '', pinCb = null;
@@ -386,6 +488,7 @@ function reportsView(){
   const cards = [...list].reverse().slice(0,60).map(s =>
     `<div class="salecard${s.void?' void':''}">
       <div class="top"><span>${s.date} ${s.time} · ${s.pay}</span><span>${fmt(s.total)}
+        <button class="voidbtn" style="border-color:#607d8b;color:#607d8b" onclick="printSale(${s.id})">PRINT</button>
         ${s.void?'':`<button class="voidbtn" onclick="voidSale(${s.id})">VOID</button>`}</span></div>
       <div class="lines">${s.lines.map(l=>esc(l.name)+' '+l.kg.toFixed(3)+esc(l.unit.charAt(0))).join(', ')}</div>
     </div>`).join('');
@@ -450,8 +553,43 @@ function itemsAdmin(){
 function delItem(i){ ask('Delete "'+products[i].name+'"? Past sales of it stay in reports.', () => {
   products.splice(i,1); save(); render(); }); }
 function settingsView(){
+  const prn = shop.printer;
   return `<div class="setrow"><span>Owner PIN</span>
       <button onclick="changePin()">Change PIN</button></div>
+    <div class="ticket" style="margin-bottom:8px">
+      <b style="font-size:15px">Receipts</b>
+      <div class="itemrow" style="margin-top:8px">
+        <input style="flex:1" value="${esc(shop.name)}" placeholder="Shop name"
+               onchange="shop.name=this.value;saveShop()"></div>
+      <div class="itemrow">
+        <input style="flex:1" value="${esc(shop.line2)}" placeholder="Address / phone (optional)"
+               onchange="shop.line2=this.value;saveShop()"></div>
+      <div class="itemrow">
+        <input style="flex:1" value="${esc(shop.footer)}" placeholder="Footer message"
+               onchange="shop.footer=this.value;saveShop()"></div>
+      <div class="itemrow">
+        <select style="flex:1" onchange="shop.printer=this.value;saveShop();render()">
+          <option value="off" ${prn==='off'?'selected':''}>No printer — share receipt as text</option>
+          <option value="bt" ${prn==='bt'?'selected':''}>Bluetooth thermal printer (direct)</option>
+          <option value="rawbt" ${prn==='rawbt'?'selected':''}>RawBT print app</option>
+        </select></div>
+      ${prn==='bt' ? `<div class="mbtns" style="margin-top:4px">
+          <button class="cancel" onclick="btPick()">Choose printer</button>
+          <button class="ok" onclick="testPrint()">Test print</button></div>
+        <div class="note">Turn the printer on, tap <b>Choose printer</b>, pick it from the list.
+          Works with Bluetooth-LE printers; if yours never appears in the list, switch to the
+          RawBT option instead.</div>` : ''}
+      ${prn==='rawbt' ? `<button class="bigbtn grey" onclick="testPrint()">Test print</button>
+        <div class="note">Install the free <b>RawBT</b> app from the Play Store once, connect the
+          printer inside RawBT, and receipts from here are handed to it — works with classic
+          Bluetooth and USB printers.</div>` : ''}
+      ${prn==='off' ? `<div class="note">Print buttons open the Android share sheet with the
+          receipt text — send it to a printer app or WhatsApp.</div>` : ''}
+      <label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px">
+        <input type="checkbox" ${shop.auto?'checked':''}
+               onchange="shop.auto=this.checked;saveShop()">
+        Print automatically after every sale</label>
+    </div>
     <div class="setrow"><span>Backup all data</span>
       <button onclick="backup()">Download</button></div>
     <div class="setrow"><span>Restore from backup</span>
@@ -467,13 +605,15 @@ function changePin(){ pinAsk('Enter NEW 4-digit PIN', p1 =>
     if (p1 === p2) { localStorage.setItem('mc_pin', p1); toast('PIN changed'); }
     else toast('PINs did not match', true);
   })); }
-function backup(){ dl(JSON.stringify({products, sales}), 'meat-pos-backup-'+today()+'.json', 'application/json'); }
+function backup(){ dl(JSON.stringify({products, sales, shop}), 'meat-pos-backup-'+today()+'.json', 'application/json'); }
 function restore(){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json';
   inp.onchange = () => { const f = inp.files[0]; if (!f) return;
     f.text().then(t => { try { const d = JSON.parse(t);
         if (!Array.isArray(d.sales) || !Array.isArray(d.products)) throw 0;
         ask('Replace ALL data on this device with the backup?', () => {
-          products = d.products; sales = d.sales; save(); render(); toast('Backup restored'); });
+          products = d.products; sales = d.sales;
+          if (d.shop) { shop = d.shop; saveShop(); }
+          save(); render(); toast('Backup restored'); });
       } catch(e){ toast('Not a valid backup file', true); } }); };
   inp.click();
 }
