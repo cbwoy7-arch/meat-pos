@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#2e3b43">
+<link rel="manifest" href="manifest.json">
+<title>Meat Centre POS</title>
+<style>
+  :root { --dark:#2e3b43; --green:#7cb342; --greend:#618c2f; --bg:#eceff1;
+          --red:#e53935; --text:#263238; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent;
+      font-family:Roboto,Arial,Helvetica,sans-serif; }
+  body { background:var(--bg); color:var(--text); height:100dvh; display:flex;
+         flex-direction:column; overflow:hidden; }
+  header { background:var(--dark); color:#fff; padding:12px 14px; display:flex;
+           justify-content:space-between; align-items:center; flex-shrink:0; }
+  header h1 { font-size:17px; font-weight:500; display:flex; align-items:center; gap:8px; }
+  header .back { font-size:22px; padding:0 6px 2px 0; cursor:pointer; }
+  header .date { font-size:13px; opacity:.8; }
+  main { flex:1; overflow-y:auto; padding:10px; }
+  nav { display:flex; background:#fff; border-top:1px solid #d5dbdf; flex-shrink:0; }
+  nav button { flex:1; padding:11px 0 max(11px, env(safe-area-inset-bottom)); border:0;
+               background:none; font-size:14px; font-weight:bold; color:#90a4ae; letter-spacing:.5px; }
+  nav button.on { color:var(--green); box-shadow:inset 0 3px 0 var(--green); }
+  /* category & item grids */
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .cat { border:0; border-radius:12px; color:#fff; font-size:18px; font-weight:bold;
+         min-height:110px; box-shadow:0 1px 4px rgba(0,0,0,.2); }
+  .cat small { display:block; font-weight:normal; font-size:13px; opacity:.9; margin-top:5px; }
+  .igrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(105px,1fr)); gap:8px; }
+  .igrid button { padding:12px 6px; border:0; border-radius:10px; background:#fff;
+                  box-shadow:0 1px 3px rgba(0,0,0,.15); font-size:14px; font-weight:bold;
+                  color:var(--text); min-height:66px; border-top:4px solid var(--cc,#90a4ae); }
+  .igrid button small { display:block; font-weight:normal; color:#607d8b; margin-top:4px; }
+  .igrid button:active { background:#e8f2dc; }
+  /* ticket bar + charge view */
+  #tbar { flex-shrink:0; margin:0 10px 10px; background:var(--green); color:#fff; border:0;
+          border-radius:10px; padding:14px; font-size:17px; font-weight:bold; display:flex;
+          justify-content:space-between; box-shadow:0 2px 6px rgba(0,0,0,.25); }
+  .ticket { background:#fff; border-radius:10px; box-shadow:0 1px 3px rgba(0,0,0,.15); padding:10px; }
+  .ticket .line { display:flex; justify-content:space-between; padding:9px 2px;
+                  border-bottom:1px solid #eee; font-size:15px; align-items:center; }
+  .ticket .line .x { color:var(--red); font-weight:bold; padding:0 8px 0 14px; font-size:18px; cursor:pointer; }
+  .ticket .tot { display:flex; justify-content:space-between; font-size:24px;
+                 font-weight:bold; padding:12px 2px 6px; }
+  .payrow { display:flex; gap:8px; margin-top:10px; }
+  .payrow button { flex:1; padding:16px 0; border:0; border-radius:10px; color:#fff;
+                   font-size:15px; font-weight:bold; }
+  .p-cash { background:var(--green); } .p-eco { background:#1e88e5; } .p-swipe { background:#5e35b1; }
+  /* qty modal, generic modal */
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.5); display:none;
+             align-items:flex-end; z-index:10; }
+  .overlay.open { display:flex; }
+  .overlay .card { background:#fff; width:100%; border-radius:16px 16px 0 0; padding:16px; }
+  .card h2 { font-size:18px; margin-bottom:2px; font-weight:500; }
+  .card .price { color:var(--greend); font-size:14px; margin-bottom:10px; }
+  .modetog { display:flex; gap:6px; margin-bottom:10px; }
+  .modetog button { flex:1; padding:9px 0; border:1px solid var(--green); background:#fff;
+                    color:var(--greend); border-radius:8px; font-size:15px; font-weight:bold; }
+  .modetog button.on { background:var(--green); color:#fff; border-color:var(--green); }
+  #qty { width:100%; font-size:30px; padding:10px; border:2px solid var(--green);
+         border-radius:10px; text-align:center; }
+  #conv { text-align:center; color:#555; font-size:16px; padding:8px 0; min-height:34px; }
+  .mbtns { display:flex; gap:8px; }
+  .mbtns button { flex:1; padding:13px 0; border:0; border-radius:10px; font-size:16px; font-weight:bold; }
+  .ok { background:var(--green); color:#fff; } .cancel { background:#dfe4e7; color:var(--text); }
+  /* pin pad */
+  #pinwrap { position:fixed; inset:0; background:var(--dark); display:none; z-index:30;
+             flex-direction:column; align-items:center; justify-content:center; color:#fff; }
+  #pinwrap.open { display:flex; }
+  #pintitle { font-size:17px; margin-bottom:14px; }
+  #pindots { display:flex; gap:14px; margin-bottom:22px; min-height:16px; }
+  #pindots i { width:14px; height:14px; border-radius:50%; border:2px solid #fff; }
+  #pindots i.f { background:var(--green); border-color:var(--green); }
+  .pinpad { display:grid; grid-template-columns:repeat(3,72px); gap:12px; }
+  .pinpad button { width:72px; height:64px; border-radius:12px; border:0; font-size:24px;
+                   background:rgba(255,255,255,.12); color:#fff; }
+  .pinpad button:active { background:var(--green); }
+  #pincancel { margin-top:22px; background:none; border:0; color:#b0bec5; font-size:15px; }
+  /* success screen */
+  #done { position:fixed; inset:0; background:var(--green); display:none; z-index:40;
+          flex-direction:column; align-items:center; justify-content:center; color:#fff; }
+  #done.open { display:flex; }
+  #done .circ { width:110px; height:110px; border-radius:50%; background:#fff;
+                color:var(--green); font-size:64px; line-height:110px; text-align:center;
+                margin-bottom:20px; font-weight:bold; }
+  #done .amt { font-size:42px; font-weight:bold; }
+  #done .how { font-size:18px; opacity:.95; margin-top:6px; }
+  #done .msg { font-size:14px; opacity:.85; margin-top:16px; }
+  /* office */
+  .subnav { display:flex; gap:6px; margin-bottom:10px; }
+  .subnav button { flex:1; padding:10px 0; border:1px solid #b0bec5; background:#fff;
+                   border-radius:8px; font-size:14px; font-weight:bold; color:#607d8b; }
+  .subnav button.on { background:var(--dark); color:#fff; border-color:var(--dark); }
+  .kpis { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:8px 0; }
+  .kpi { background:#fff; border-radius:10px; padding:10px; text-align:center;
+         box-shadow:0 1px 3px rgba(0,0,0,.15); }
+  .kpi b { display:block; font-size:18px; color:var(--greend); }
+  .kpi span { font-size:12px; color:#78909c; }
+  table { width:100%; background:#fff; border-radius:10px; border-collapse:collapse;
+          overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.15); font-size:14px; }
+  th { background:var(--dark); color:#fff; padding:8px; text-align:left; font-size:13px; font-weight:500; }
+  td { padding:8px; border-bottom:1px solid #eee; }
+  td.n, th.n { text-align:right; }
+  .toolbar { display:flex; gap:6px; flex-wrap:wrap; margin:10px 0; align-items:center; }
+  .toolbar button, .toolbar input[type=date] { padding:9px 11px; border:1px solid #b0bec5;
+      border-radius:8px; background:#fff; font-size:14px; font-weight:bold; color:var(--text); }
+  .salecard { background:#fff; border-radius:10px; padding:9px 11px; margin-top:8px;
+              box-shadow:0 1px 3px rgba(0,0,0,.15); font-size:14px; }
+  .salecard.void { opacity:.5; text-decoration:line-through; }
+  .salecard .top { display:flex; justify-content:space-between; font-weight:bold; }
+  .salecard .voidbtn { color:var(--red); background:none; border:1px solid var(--red);
+                       border-radius:6px; padding:3px 9px; font-size:12px; font-weight:bold; }
+  .salecard .lines { color:#607d8b; font-size:13px; margin-top:3px; }
+  .itemrow { display:flex; gap:5px; margin-bottom:6px; align-items:center; }
+  .itemrow input, .itemrow select { padding:9px 6px; border:1px solid #cfd8dc; border-radius:8px;
+                                    font-size:13px; background:#fff; min-width:0; }
+  .itemrow .nm { flex:2.6; } .itemrow .un { flex:.9; } .itemrow .pr { flex:1.1; } .itemrow .ct { flex:1.6; }
+  .itemrow .del { color:var(--red); font-size:19px; font-weight:bold; padding:0 4px; background:none; border:0; }
+  .bigbtn { width:100%; padding:13px 0; border:0; border-radius:10px; background:var(--green);
+            color:#fff; font-size:16px; font-weight:bold; margin-top:8px; }
+  .bigbtn.grey { background:#546e7a; }
+  .note { font-size:12px; color:#78909c; margin-top:8px; line-height:1.5; }
+  .setrow { background:#fff; border-radius:10px; padding:13px; margin-bottom:8px;
+            box-shadow:0 1px 3px rgba(0,0,0,.15); display:flex; justify-content:space-between;
+            align-items:center; font-size:15px; }
+  .setrow button { border:1px solid #b0bec5; background:#fff; border-radius:8px;
+                   padding:8px 13px; font-weight:bold; font-size:13px; color:var(--text); }
+  #toast { position:fixed; top:14px; left:50%; transform:translateX(-50%); background:var(--greend);
+           color:#fff; padding:10px 22px; border-radius:24px; font-weight:bold; display:none;
+           z-index:50; max-width:88%; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="hdr">Meat Centre POS</h1>
+  <div class="date" id="hdrdate"></div>
+</header>
+<main id="main"></main>
+<button id="tbar" style="display:none" onclick="view='charge';render()"></button>
+<nav>
+  <button id="nav-sell" class="on" onclick="goSell()">SELL</button>
+  <button id="nav-office" onclick="goOffice()">BACK OFFICE</button>
+</nav>
+
+<div class="overlay" id="modal">
+  <div class="card">
+    <h2 id="m-name"></h2>
+    <div class="price" id="m-price"></div>
+    <div class="modetog">
+      <button id="tog-kg" class="on" onclick="setMode('kg')">By weight</button>
+      <button id="tog-usd" onclick="setMode('usd')">By $ amount</button>
+    </div>
+    <input id="qty" type="number" inputmode="decimal" step="any" min="0" placeholder="0.000" oninput="conv()">
+    <div id="conv"></div>
+    <div class="mbtns">
+      <button class="cancel" onclick="closeModal()">Cancel</button>
+      <button class="ok" onclick="addLine()">ADD</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="confirm" style="align-items:center">
+  <div class="card" style="border-radius:16px;margin:0 20px">
+    <h2 id="c-text" style="margin-bottom:14px"></h2>
+    <div class="mbtns">
+      <button class="cancel" onclick="closeConfirm(false)">Cancel</button>
+      <button class="ok" style="background:var(--red)" id="c-yes" onclick="closeConfirm(true)">YES</button>
+    </div>
+  </div>
+</div>
+
+<div id="pinwrap">
+  <div id="pintitle">Enter owner PIN</div>
+  <div id="pindots"><i></i><i></i><i></i><i></i></div>
+  <div class="pinpad">
+    <button onclick="pinKey(1)">1</button><button onclick="pinKey(2)">2</button><button onclick="pinKey(3)">3</button>
+    <button onclick="pinKey(4)">4</button><button onclick="pinKey(5)">5</button><button onclick="pinKey(6)">6</button>
+    <button onclick="pinKey(7)">7</button><button onclick="pinKey(8)">8</button><button onclick="pinKey(9)">9</button>
+    <button style="visibility:hidden"></button><button onclick="pinKey(0)">0</button><button onclick="pinKey(-1)">⌫</button>
+  </div>
+  <button id="pincancel" onclick="pinCancel()">Cancel</button>
+</div>
+
+<div id="done" onclick="hideDone()">
+  <div class="circ">✓</div>
+  <div class="amt" id="d-amt"></div>
+  <div class="how" id="d-how"></div>
+  <div class="msg">Sale recorded — tap to continue</div>
+</div>
+<div id="toast"></div>
+
+<script>
+// ---------------- data ----------------
+const CAT_COLORS = { 'Beef':'#e53935', 'Chicken':'#fb8c00', 'Pork':'#d81b60', 'Processed':'#8e24aa' };
+const PALETTE = ['#e53935','#fb8c00','#d81b60','#8e24aa','#1e88e5','#43a047','#6d4c41','#546e7a'];
+const DEFAULTS = [ // name, unit, selling $/unit (workbook cost x 1.38), category
+  ["Beef Super","kg",6.00,"Beef"],["Beef Commercial","kg",5.52,"Beef"],
+  ["Beef Manufacturing","kg",4.97,"Beef"],["T-Bone Steak","kg",5.52,"Beef"],
+  ["Offals","kg",4.00,"Beef"],["Beef Bones","kg",4.00,"Beef"],["Liver","kg",4.97,"Beef"],
+  ["Bibles","kg",4.00,"Beef"],["Beef Mince","kg",5.52,"Beef"],
+  ["Chicken Meat","kg",5.52,"Chicken"],["Chicken Feet","kg",4.00,"Chicken"],
+  ["Chicken Necks","kg",4.00,"Chicken"],["Chicken Livers","kg",4.00,"Chicken"],
+  ["Eggs","tray",5.52,"Chicken"],
+  ["Pork Meat","kg",6.00,"Pork"],["Trotters","kg",5.52,"Pork"],["Pork Head","kg",5.52,"Pork"],
+  ["Polony","kg",6.00,"Processed"],["Russian Sausages","kg",4.97,"Processed"],
+  ["Sausages","kg",5.52,"Processed"]
+].map(([name,unit,price,cat]) => ({name,unit,price,cat}));
+
+let products = load('mc_products', DEFAULTS);
+for (const p of products) if (!p.cat) p.cat = 'Other';   // migrate v1 data
+let sales = load('mc_sales', []);
+let ticket = [], tab = 'sell', view = 'cats', selCat = null;
+let office = 'reports', pinOK = false, cur = null, mode = 'kg';
+let repFrom = today(), repTo = today();
+
+function load(k, d){ try { return JSON.parse(localStorage.getItem(k)) || d; } catch(e){ return d; } }
+function save(){ localStorage.setItem('mc_products', JSON.stringify(products));
+                 localStorage.setItem('mc_sales', JSON.stringify(sales)); }
+function today(){ const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function fmt(n){ return '$'+n.toFixed(2); }
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+function round2(n){ return Math.round(n*100)/100; }
+function round3(n){ return Math.round(n*1000)/1000; }
+function cats(){ const seen = []; for (const p of products) if (!seen.includes(p.cat)) seen.push(p.cat); return seen; }
+function catColor(c){ return CAT_COLORS[c] || PALETTE[cats().indexOf(c) % PALETTE.length]; }
+function toast(msg, bad){ const t = document.getElementById('toast'); t.textContent = msg;
+  t.style.background = bad ? 'var(--red)' : 'var(--greend)'; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(()=>t.style.display='none', 1800); }
+
+// ---------------- navigation / render ----------------
+function goSell(){ tab = 'sell'; if (view === 'office') view = 'cats'; render(); }
+function goOffice(){ if (pinOK) { tab = 'office'; render(); }
+  else pinAsk('Enter owner PIN', pin => {
+    if (pin === (localStorage.getItem('mc_pin') || '2026')) { pinOK = true; tab = 'office'; render(); }
+    else { toast('Wrong PIN', true); }
+  });
+}
+function render(){
+  document.getElementById('hdrdate').textContent = today();
+  document.getElementById('nav-sell').classList.toggle('on', tab==='sell');
+  document.getElementById('nav-office').classList.toggle('on', tab==='office');
+  const m = document.getElementById('main'), hdr = document.getElementById('hdr');
+  if (tab === 'sell'){
+    if (view === 'cats'){ hdr.textContent = 'Meat Centre POS'; m.innerHTML = catsView(); }
+    else if (view === 'items'){ hdr.innerHTML = `<span class="back" onclick="view='cats';render()">‹</span> ${esc(selCat)}`; m.innerHTML = itemsGrid(); }
+    else { hdr.innerHTML = `<span class="back" onclick="view='items';render()">‹</span> Ticket`; m.innerHTML = chargeView(); }
+  } else {
+    hdr.textContent = 'Back Office';
+    m.innerHTML = officeView();
+  }
+  tbar();
+}
+function tbar(){ const b = document.getElementById('tbar');
+  const total = ticket.reduce((s,l)=>s+l.amt,0);
+  const show = tab==='sell' && view!=='charge' && ticket.length;
+  b.style.display = show ? 'flex' : 'none';
+  if (show) b.innerHTML = `<span>${ticket.length} item${ticket.length>1?'s':''}</span><span>CHARGE ${fmt(total)} ›</span>`;
+}
+
+// ---------------- SELL ----------------
+function catsView(){
+  return '<div class="grid">' + cats().map(c => {
+    const n = products.filter(p=>p.cat===c).length;
+    return `<button class="cat" style="background:${catColor(c)}" onclick="selCat='${esc(c)}';view='items';render()">
+      ${esc(c)}<small>${n} item${n>1?'s':''}</small></button>`;
+  }).join('') + '</div>';
+}
+function itemsGrid(){
+  return '<div class="igrid">' + products.map((p,i) => p.cat!==selCat ? '' :
+    `<button style="--cc:${catColor(p.cat)}" onclick="openModal(${i})">${esc(p.name)}
+     <small>${fmt(p.price)}/${esc(p.unit)}</small></button>`).join('') + '</div>';
+}
+function chargeView(){
+  const lines = ticket.map((l,i) =>
+    `<div class="line"><span>${esc(l.name)} — ${l.kg.toFixed(3)} ${esc(l.unit)}</span>
+     <span>${fmt(l.amt)}<span class="x" onclick="ticket.splice(${i},1);if(!ticket.length)view='items';render()">✕</span></span></div>`).join('');
+  const total = ticket.reduce((s,l)=>s+l.amt,0);
+  return `<div class="ticket">${lines}
+      <div class="tot"><span>TOTAL</span><span>${fmt(total)}</span></div>
+      <div class="payrow">
+        <button class="p-cash" onclick="pay('Cash')">CASH</button>
+        <button class="p-eco" onclick="pay('EcoCash')">ECOCASH</button>
+        <button class="p-swipe" onclick="pay('Swipe')">SWIPE</button>
+      </div></div>
+    <div class="note">Take the money / confirm the EcoCash or swipe approval BEFORE pressing the button.</div>`;
+}
+function openModal(i){ cur = products[i]; mode = 'kg';
+  document.getElementById('m-name').textContent = cur.name;
+  document.getElementById('m-price').textContent = fmt(cur.price)+' per '+cur.unit;
+  document.getElementById('tog-kg').textContent = 'By '+(cur.unit==='kg'?'weight':cur.unit);
+  setMode('kg');
+  const q = document.getElementById('qty'); q.value = '';
+  document.getElementById('modal').classList.add('open');
+  setTimeout(()=>q.focus(), 50);
+}
+function setMode(m){ mode = m;
+  document.getElementById('tog-kg').classList.toggle('on', m==='kg');
+  document.getElementById('tog-usd').classList.toggle('on', m==='usd');
+  document.getElementById('qty').placeholder = m==='kg' ? '0.000' : '0.00';
+  conv();
+}
+function conv(){ const v = parseFloat(document.getElementById('qty').value), c = document.getElementById('conv');
+  if (!cur || !(v>0)) { c.textContent = ''; return; }
+  c.textContent = mode==='kg' ? '= '+fmt(round2(v*cur.price))
+                              : '= '+(round3(v/cur.price)).toFixed(3)+' '+cur.unit;
+}
+function addLine(){ const v = parseFloat(document.getElementById('qty').value);
+  if (!(v>0)) { toast('Enter a quantity', true); return; }
+  const kg = mode==='kg' ? round3(v) : round3(v/cur.price);
+  const amt = mode==='kg' ? round2(v*cur.price) : round2(v);
+  ticket.push({name:cur.name, unit:cur.unit, kg, price:cur.price, amt});
+  closeModal(); render();
+}
+function closeModal(){ document.getElementById('modal').classList.remove('open'); }
+function pay(how){ if (!ticket.length) return;
+  const total = round2(ticket.reduce((s,l)=>s+l.amt,0));
+  sales.push({id:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+              lines:ticket, pay:how, total, void:false});
+  ticket = []; view = 'cats'; save(); render(); showDone(total, how);
+}
+function showDone(total, how){
+  document.getElementById('d-amt').textContent = fmt(total);
+  document.getElementById('d-how').textContent = how + ' payment received';
+  document.getElementById('done').classList.add('open');
+  try { navigator.vibrate && navigator.vibrate(150); } catch(e){}
+  try { const ac = new (window.AudioContext||window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.frequency.value = 880; g.gain.value = .12;
+    o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + .15);
+  } catch(e){}
+  clearTimeout(showDone._h); showDone._h = setTimeout(hideDone, 1800);
+}
+function hideDone(){ document.getElementById('done').classList.remove('open'); }
+
+// ---------------- PIN pad (no window.prompt — works in APK/WebView) ----------------
+let pinBuf = '', pinCb = null;
+function pinAsk(titleText, cb){ pinBuf = ''; pinCb = cb;
+  document.getElementById('pintitle').textContent = titleText;
+  pinDots(); document.getElementById('pinwrap').classList.add('open'); }
+function pinKey(k){ if (k === -1) pinBuf = pinBuf.slice(0,-1);
+  else if (pinBuf.length < 4) pinBuf += String(k);
+  pinDots();
+  if (pinBuf.length === 4){ const pin = pinBuf, cb = pinCb;
+    setTimeout(() => { pinClose(); cb(pin); }, 120); }
+}
+function pinDots(){ document.querySelectorAll('#pindots i').forEach((el,i) =>
+  el.classList.toggle('f', i < pinBuf.length)); }
+function pinCancel(){ pinClose(); }
+function pinClose(){ document.getElementById('pinwrap').classList.remove('open'); pinBuf=''; }
+
+// ---------------- confirm modal (no window.confirm) ----------------
+let confCb = null;
+function ask(text, cb){ confCb = cb; document.getElementById('c-text').textContent = text;
+  document.getElementById('confirm').classList.add('open'); }
+function closeConfirm(yes){ document.getElementById('confirm').classList.remove('open');
+  const cb = confCb; confCb = null; if (yes && cb) cb(); }
+
+// ---------------- BACK OFFICE ----------------
+function officeView(){
+  const sub = `<div class="subnav">
+    <button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>
+    <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
+    <button class="${office==='settings'?'on':''}" onclick="office='settings';render()">Settings</button>
+  </div>`;
+  if (office==='reports') return sub + reportsView();
+  if (office==='items') return sub + itemsAdmin();
+  return sub + settingsView();
+}
+function rangeSales(){ return sales.filter(s => s.date >= repFrom && s.date <= repTo); }
+function agg(){ const m = {};
+  for (const s of rangeSales()) if (!s.void)
+    for (const l of s.lines){ m[l.name] = m[l.name] || {kg:0, amt:0};
+      m[l.name].kg += l.kg; m[l.name].amt += l.amt; }
+  return m;
+}
+function reportsView(){
+  const list = rangeSales(), a = agg(), live = list.filter(s=>!s.void);
+  const tot = live.reduce((s,x)=>s+x.total,0);
+  const by = how => live.filter(s=>s.pay===how).reduce((s,x)=>s+x.total,0);
+  const names = [...products.map(p=>p.name), ...Object.keys(a).filter(n=>!products.some(p=>p.name===n))];
+  const rows = names.filter(n=>a[n]).map(n =>
+    `<tr><td>${esc(n)}</td><td class="n">${a[n].kg.toFixed(3)}</td><td class="n">${fmt(a[n].amt)}</td></tr>`).join('');
+  const cards = [...list].reverse().slice(0,60).map(s =>
+    `<div class="salecard${s.void?' void':''}">
+      <div class="top"><span>${s.date} ${s.time} · ${s.pay}</span><span>${fmt(s.total)}
+        ${s.void?'':`<button class="voidbtn" onclick="voidSale(${s.id})">VOID</button>`}</span></div>
+      <div class="lines">${s.lines.map(l=>esc(l.name)+' '+l.kg.toFixed(3)+esc(l.unit.charAt(0))).join(', ')}</div>
+    </div>`).join('');
+  return `<div class="toolbar">
+      <input type="date" value="${repFrom}" onchange="repFrom=this.value;render()">
+      <span>to</span>
+      <input type="date" value="${repTo}" onchange="repTo=this.value;render()">
+      <button onclick="copySummary()">Copy</button>
+      <button onclick="csv()">CSV</button>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><b>${fmt(tot)}</b><span>Total</span></div>
+      <div class="kpi"><b>${fmt(by('Cash'))}</b><span>Cash</span></div>
+      <div class="kpi"><b>${fmt(by('EcoCash'))}</b><span>EcoCash</span></div>
+      <div class="kpi"><b>${fmt(by('Swipe'))}</b><span>Swipe</span></div>
+    </div>
+    <table><tr><th>Product</th><th class="n">Sold kg</th><th class="n">Takings $</th></tr>
+      ${rows || '<tr><td colspan="3" style="color:#999">No sales in this range</td></tr>'}</table>
+    ${cards}
+    <div class="note">Daily close: set both dates to today, then enter each line's Sold kg into
+      the workbook's <b>Daily Stock → POS sold kg</b>. Cash goes to Till Rec's Cash column;
+      EcoCash + Swipe together go to the EcoCash/transfers column. Voided sales stay on
+      record but are excluded from totals.</div>`;
+}
+function voidSale(id){ ask('Void this sale? It stays on record but is removed from totals.', () => {
+  const s = sales.find(x=>x.id===id); if (s) { s.void = true; save(); render(); } }); }
+function copySummary(){ const a = agg();
+  const txt = ['Meat Centre '+(repFrom===repTo ? repFrom : repFrom+' to '+repTo),
+    ...products.filter(p=>a[p.name]).map(p=>`${p.name}: ${a[p.name].kg.toFixed(3)} kg  ${fmt(a[p.name].amt)}`),
+    'TOTAL: '+fmt(Object.values(a).reduce((s,x)=>s+x.amt,0))].join('\n');
+  if (navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast('Summary copied'), ()=>toast(txt));
+  else toast('Copy not available on this device', true);
+}
+function csv(){ const days = {};
+  for (const s of rangeSales()) if (!s.void)
+    for (const l of s.lines){ const k = s.date+'|'+l.name;
+      days[k] = days[k] || {kg:0, amt:0}; days[k].kg += l.kg; days[k].amt += l.amt; }
+  const rows = [['Date','Product','POS sold kg','POS takings $'],
+    ...Object.keys(days).sort().map(k => { const [d,n] = k.split('|');
+      return [d, n, days[k].kg.toFixed(3), days[k].amt.toFixed(2)]; })];
+  dl(rows.map(r=>r.join(',')).join('\n'), 'pos-sales-'+repFrom+'-to-'+repTo+'.csv', 'text/csv');
+}
+function itemsAdmin(){
+  const opts = cats().map(c=>`<option>${esc(c)}</option>`).join('');
+  const rows = products.map((p,i) =>
+    `<div class="itemrow">
+      <input class="nm" value="${esc(p.name)}" onchange="products[${i}].name=this.value">
+      <input class="un" value="${esc(p.unit)}" onchange="products[${i}].unit=this.value">
+      <input class="pr" type="number" step="0.01" value="${p.price}"
+             onchange="products[${i}].price=parseFloat(this.value)||0">
+      <input class="ct" value="${esc(p.cat)}" list="catlist" onchange="products[${i}].cat=this.value||'Other'">
+      <button class="del" onclick="delItem(${i})">✕</button>
+    </div>`).join('');
+  return `<datalist id="catlist">${opts}</datalist>${rows}
+    <button class="bigbtn grey" onclick="products.push({name:'New item',unit:'kg',price:0,cat:'Other'});render()">+ Add product line</button>
+    <button class="bigbtn" onclick="save();toast('Saved');render()">SAVE</button>
+    <div class="note">Type a new category name in the category box to create it — it becomes a
+      tile on the sell screen automatically. Product names must match the Excel workbook's
+      Products sheet EXACTLY, and prices must equal the workbook selling price (cost × 1.38),
+      or the daily figures won't line up with Daily Stock.</div>`;
+}
+function delItem(i){ ask('Delete "'+products[i].name+'"? Past sales of it stay in reports.', () => {
+  products.splice(i,1); save(); render(); }); }
+function settingsView(){
+  return `<div class="setrow"><span>Owner PIN</span>
+      <button onclick="changePin()">Change PIN</button></div>
+    <div class="setrow"><span>Backup all data</span>
+      <button onclick="backup()">Download</button></div>
+    <div class="setrow"><span>Restore from backup</span>
+      <button onclick="restore()">Choose file</button></div>
+    <div class="setrow"><span>Lock back office</span>
+      <button onclick="pinOK=false;goSell();toast('Locked')">Lock now</button></div>
+    <div class="note">Back up weekly and before any phone repair or reset — save the file to
+      Google Drive. Data lives only on this device; clearing the app's storage deletes the
+      sales record.</div>`;
+}
+function changePin(){ pinAsk('Enter NEW 4-digit PIN', p1 =>
+  pinAsk('Repeat new PIN', p2 => {
+    if (p1 === p2) { localStorage.setItem('mc_pin', p1); toast('PIN changed'); }
+    else toast('PINs did not match', true);
+  })); }
+function backup(){ dl(JSON.stringify({products, sales}), 'meat-pos-backup-'+today()+'.json', 'application/json'); }
+function restore(){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json';
+  inp.onchange = () => { const f = inp.files[0]; if (!f) return;
+    f.text().then(t => { try { const d = JSON.parse(t);
+        if (!Array.isArray(d.sales) || !Array.isArray(d.products)) throw 0;
+        ask('Replace ALL data on this device with the backup?', () => {
+          products = d.products; sales = d.sales; save(); render(); toast('Backup restored'); });
+      } catch(e){ toast('Not a valid backup file', true); } }); };
+  inp.click();
+}
+function dl(text, name, type){ const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], {type})); a.download = name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 5000); }
+
+// ---------------- boot ----------------
+if ('serviceWorker' in navigator && location.protocol.startsWith('http'))
+  navigator.serviceWorker.register('sw.js');
+render();
+</script>
+</body>
+</html>

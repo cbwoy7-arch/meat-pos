@@ -1,0 +1,77 @@
+# Meat Centre POS — own-build, offline, free
+
+No dependencies, no subscription, no account. All data stays on the device.
+Loyverse-style look: charcoal header, green charge button, colour-coded categories.
+
+Files: `index.html` (the whole app) · `sw.js` (offline cache) · `manifest.json` +
+`icon-192.png` / `icon-512.png` (Android install identity).
+
+## How selling works
+
+1. Opens on **category tiles** — Beef, Chicken, Pork, Processed (tiles appear/disappear
+   automatically as you add categories in the back office).
+2. Tap a category → its items with prices → tap an item → enter **weight** or **$ amount**
+   (converts both ways at the set price).
+3. Green **CHARGE** bar shows the running ticket. Tap it → review lines → take payment:
+   **CASH**, **ECOCASH**, or **SWIPE** (card machine).
+4. Green **✓ confirmation screen** with the amount and payment method (plus a beep and
+   vibration on the phone), then back to categories for the next customer.
+
+## Back office (the backend)
+
+Bottom-right tab, guarded by an on-screen **PIN pad** (default PIN **2026** — change it in
+Settings on day one). No browser pop-ups are used anywhere, so everything works inside an
+Android app shell.
+
+- **Reports** — any date range: total / cash / EcoCash / swipe split, sales-by-item in kg
+  and $, individual sales with **VOID** (voids stay on record, struck through — audit
+  trail, never deletion). **Copy** gives a paste-ready summary; **CSV** exports per-day
+  per-product figures.
+- **Items** — add/edit/delete product lines, prices, units, categories. Typing a new
+  category name creates a new tile on the sell screen. Names must match the Excel
+  workbook's Products sheet EXACTLY; prices = workbook selling price (cost × 1.38).
+- **Settings** — change PIN, backup/restore all data (JSON), lock the office.
+
+## Daily close (feeds the Excel control)
+
+Reports → set both dates to today → enter each line's **Sold kg** into the workbook's
+**Daily Stock → POS sold kg** column. **Cash** goes to Till Rec's cash column;
+**EcoCash + Swipe together** go to the EcoCash/transfers column.
+
+## Getting it on the phone
+
+**Route A — install as an app from the browser (works today, 10 min):**
+1. Host the folder once: free GitHub account → new public repo `meat-pos` → upload the
+   files → Settings → Pages → deploy from main. App lives at
+   `https://<username>.github.io/meat-pos/`.
+2. On the phone: open that address in Chrome → menu ⋮ → **Add to Home screen / Install app**.
+3. Open it once while online; after that it runs fully offline, full-screen, with its own
+   icon — behaves exactly like an installed app.
+
+**Route B — a real .apk file (adds ~15 min on top of Route A):**
+1. After hosting, go to **pwabuilder.com**, paste the app's address, choose Android →
+   download the signed APK package.
+2. Copy the APK to the phone (WhatsApp/USB), tap it, allow "install unknown apps" once.
+This gives a true APK you can pass phone-to-phone. Note it still needs Route A's hosting
+to exist the first time; after install it is fully offline.
+
+(A third option — building the APK locally with Android Studio/Capacitor — needs a ~3 GB
+toolchain on the laptop and adds nothing for this app. Skip unless you want the hosting
+dependency gone entirely; ask Claude to set it up if so.)
+
+**After any app update:** close and reopen the app twice — the first open fetches the new
+version in the background, the second one runs it.
+
+## Data safety rules
+
+- Data lives in the device's app storage. **Never clear the app's/Chrome's site data** —
+  that is the sales record.
+- **Backup weekly** (Settings → Backup) and before any phone repair/reset; save the file
+  to Google Drive. Restore reloads it onto any device.
+- One live till by design — devices don't sync; the Excel workbook is the master record.
+
+## Known limits (deliberate, for now)
+
+- No receipt printing (possible later via Bluetooth ESC/POS printer).
+- No multi-device sync.
+- Not ZIMRA-fiscalised — fine until VAT registration (~Feb–Mar 2027); revisit then.
