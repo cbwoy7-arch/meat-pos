@@ -94,7 +94,7 @@
   /* office */
   .subnav { display:flex; gap:6px; margin-bottom:10px; }
   .subnav button { flex:1; padding:10px 0; border:1px solid #b0bec5; background:#fff;
-                   border-radius:8px; font-size:14px; font-weight:bold; color:#607d8b; }
+                   border-radius:8px; font-size:13px; font-weight:bold; color:#607d8b; }
   .subnav button.on { background:var(--dark); color:#fff; border-color:var(--dark); }
   .kpis { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:8px 0; }
   .kpi { background:#fff; border-radius:10px; padding:10px; text-align:center;
@@ -120,7 +120,14 @@
   .itemrow input, .itemrow select { padding:9px 6px; border:1px solid #cfd8dc; border-radius:8px;
                                     font-size:13px; background:#fff; min-width:0; }
   .itemrow .nm { flex:2.6; } .itemrow .un { flex:.9; } .itemrow .pr { flex:1.1; } .itemrow .ct { flex:1.6; }
+  .itemrow .co, .itemrow .st, .itemrow .lo { flex:1.1; }
   .itemrow .del { color:var(--red); font-size:19px; font-weight:bold; padding:0 4px; background:none; border:0; }
+  .icard { background:#fff; border-radius:10px; padding:9px; margin-bottom:8px;
+           box-shadow:0 1px 3px rgba(0,0,0,.15); }
+  .icard .itemrow input { background:#fafafa; }
+  .itemrow.lab { margin:2px 0; }
+  .itemrow.lab span { font-size:10px; color:#90a4ae; text-transform:uppercase;
+                      letter-spacing:.4px; padding:0 6px; }
   .bigbtn { width:100%; padding:13px 0; border:0; border-radius:10px; background:var(--green);
             color:#fff; font-size:16px; font-weight:bold; margin-top:8px; }
   .bigbtn.grey { background:#546e7a; }
@@ -210,10 +217,15 @@ const DEFAULTS = [ // name, unit, selling $/unit (workbook cost x 1.38), categor
   ["Pork Meat","kg",6.00,"Pork"],["Trotters","kg",5.52,"Pork"],["Pork Head","kg",5.52,"Pork"],
   ["Polony","kg",6.00,"Processed"],["Russian Sausages","kg",4.97,"Processed"],
   ["Sausages","kg",5.52,"Processed"]
-].map(([name,unit,price,cat]) => ({name,unit,price,cat}));
+].map(([name,unit,price,cat]) => ({name,unit,price,cat,cost:round2(price/1.38),stock:0,low:0}));
 
 let products = load('mc_products', DEFAULTS);
-for (const p of products) if (!p.cat) p.cat = 'Other';   // migrate v1 data
+for (const p of products){                               // migrate older data
+  if (!p.cat) p.cat = 'Other';
+  if (p.cost == null) p.cost = round2(p.price/1.38);     // workbook rule: sell = cost x 1.38
+  if (p.stock == null) p.stock = 0;
+  if (p.low == null) p.low = 0;                          // 0 = no restock alert
+}
 let sales = load('mc_sales', []);
 let ticket = [], tab = 'sell', view = 'cats', selCat = null;
 let office = 'reports', pinOK = false, cur = null, mode = 'kg';
@@ -318,7 +330,7 @@ function addLine(){ const v = parseFloat(document.getElementById('qty').value);
   if (!(v>0)) { toast('Enter a quantity', true); return; }
   const kg = mode==='kg' ? round3(v) : round3(v/cur.price);
   const amt = mode==='kg' ? round2(v*cur.price) : round2(v);
-  ticket.push({name:cur.name, unit:cur.unit, kg, price:cur.price, amt});
+  ticket.push({name:cur.name, unit:cur.unit, kg, price:cur.price, cost:cur.cost||0, amt});
   closeModal(); render();
 }
 function closeModal(){ document.getElementById('modal').classList.remove('open'); }
@@ -327,6 +339,8 @@ function pay(how){ if (!ticket.length) return;
   const rec = {id:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
                lines:ticket, pay:how, total, void:false};
   sales.push(rec); lastSaleId = rec.id;
+  for (const l of rec.lines){ const p = products.find(x => x.name === l.name);
+    if (p) p.stock = round3((p.stock||0) - l.kg); }
   ticket = []; view = 'cats'; save(); render(); showDone(total, how);
   if (shop.auto && shop.printer !== 'off') printSale(rec.id);
 }
@@ -464,27 +478,34 @@ function closeConfirm(yes){ document.getElementById('confirm').classList.remove(
 function officeView(){
   const sub = `<div class="subnav">
     <button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>
+    <button class="${office==='stock'?'on':''}" onclick="office='stock';render()">Stock${lowStock().length?' ⚠':''}</button>
     <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
     <button class="${office==='settings'?'on':''}" onclick="office='settings';render()">Settings</button>
   </div>`;
   if (office==='reports') return sub + reportsView();
+  if (office==='stock') return sub + stockView();
   if (office==='items') return sub + itemsAdmin();
   return sub + settingsView();
 }
 function rangeSales(){ return sales.filter(s => s.date >= repFrom && s.date <= repTo); }
+function costOf(name){ const p = products.find(x => x.name === name); return p ? p.cost||0 : 0; }
+function lineCost(l){ return l.kg * (l.cost != null ? l.cost : costOf(l.name)); }
+function lowStock(){ return products.filter(p => p.low > 0 && p.stock <= p.low); }
 function agg(){ const m = {};
   for (const s of rangeSales()) if (!s.void)
-    for (const l of s.lines){ m[l.name] = m[l.name] || {kg:0, amt:0};
-      m[l.name].kg += l.kg; m[l.name].amt += l.amt; }
+    for (const l of s.lines){ m[l.name] = m[l.name] || {kg:0, amt:0, cogs:0};
+      m[l.name].kg += l.kg; m[l.name].amt += l.amt; m[l.name].cogs += lineCost(l); }
   return m;
 }
 function reportsView(){
   const list = rangeSales(), a = agg(), live = list.filter(s=>!s.void);
   const tot = live.reduce((s,x)=>s+x.total,0);
   const by = how => live.filter(s=>s.pay===how).reduce((s,x)=>s+x.total,0);
+  const cogs = Object.values(a).reduce((s,x)=>s+x.cogs,0);
   const names = [...products.map(p=>p.name), ...Object.keys(a).filter(n=>!products.some(p=>p.name===n))];
   const rows = names.filter(n=>a[n]).map(n =>
-    `<tr><td>${esc(n)}</td><td class="n">${a[n].kg.toFixed(3)}</td><td class="n">${fmt(a[n].amt)}</td></tr>`).join('');
+    `<tr><td>${esc(n)}</td><td class="n">${a[n].kg.toFixed(3)}</td><td class="n">${fmt(a[n].amt)}</td>
+     <td class="n">${fmt(a[n].amt - a[n].cogs)}</td></tr>`).join('');
   const cards = [...list].reverse().slice(0,60).map(s =>
     `<div class="salecard${s.void?' void':''}">
       <div class="top"><span>${s.date} ${s.time} · ${s.pay}</span><span>${fmt(s.total)}
@@ -505,8 +526,15 @@ function reportsView(){
       <div class="kpi"><b>${fmt(by('EcoCash'))}</b><span>EcoCash</span></div>
       <div class="kpi"><b>${fmt(by('Swipe'))}</b><span>Swipe</span></div>
     </div>
-    <table><tr><th>Product</th><th class="n">Sold kg</th><th class="n">Takings $</th></tr>
-      ${rows || '<tr><td colspan="3" style="color:#999">No sales in this range</td></tr>'}</table>
+    <div class="kpis">
+      <div class="kpi"><b>${fmt(cogs)}</b><span>Restock value (cost of sold)</span></div>
+      <div class="kpi"><b>${fmt(tot - cogs)}</b><span>Gross profit</span></div>
+      <div class="kpi"><b>${tot ? Math.round((tot-cogs)/tot*100)+'%' : '—'}</b><span>Margin</span></div>
+      <div class="kpi"${lowStock().length?' style="outline:2px solid var(--red)"':''}>
+        <b>${lowStock().length}</b><span>Need restocking → Stock tab</span></div>
+    </div>
+    <table><tr><th>Product</th><th class="n">Sold kg</th><th class="n">Takings $</th><th class="n">Profit $</th></tr>
+      ${rows || '<tr><td colspan="4" style="color:#999">No sales in this range</td></tr>'}</table>
     ${cards}
     <div class="note">Daily close: set both dates to today, then enter each line's Sold kg into
       the workbook's <b>Daily Stock → POS sold kg</b>. Cash goes to Till Rec's Cash column;
@@ -514,41 +542,93 @@ function reportsView(){
       record but are excluded from totals.</div>`;
 }
 function voidSale(id){ ask('Void this sale? It stays on record but is removed from totals.', () => {
-  const s = sales.find(x=>x.id===id); if (s) { s.void = true; save(); render(); } }); }
+  const s = sales.find(x=>x.id===id); if (s) { s.void = true;
+    for (const l of s.lines){ const p = products.find(x => x.name === l.name);
+      if (p) p.stock = round3((p.stock||0) + l.kg); }        // goods go back on the shelf
+    save(); render(); } }); }
 function copySummary(){ const a = agg();
+  const tot = Object.values(a).reduce((s,x)=>s+x.amt,0);
+  const cogs = Object.values(a).reduce((s,x)=>s+x.cogs,0);
   const txt = ['Meat Centre '+(repFrom===repTo ? repFrom : repFrom+' to '+repTo),
     ...products.filter(p=>a[p.name]).map(p=>`${p.name}: ${a[p.name].kg.toFixed(3)} kg  ${fmt(a[p.name].amt)}`),
-    'TOTAL: '+fmt(Object.values(a).reduce((s,x)=>s+x.amt,0))].join('\n');
+    'TOTAL: '+fmt(tot),
+    'RESTOCK VALUE (cost of sold): '+fmt(cogs),
+    'GROSS PROFIT: '+fmt(tot - cogs)].join('\n');
   if (navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast('Summary copied'), ()=>toast(txt));
   else toast('Copy not available on this device', true);
 }
 function csv(){ const days = {};
   for (const s of rangeSales()) if (!s.void)
     for (const l of s.lines){ const k = s.date+'|'+l.name;
-      days[k] = days[k] || {kg:0, amt:0}; days[k].kg += l.kg; days[k].amt += l.amt; }
-  const rows = [['Date','Product','POS sold kg','POS takings $'],
+      days[k] = days[k] || {kg:0, amt:0, cogs:0};
+      days[k].kg += l.kg; days[k].amt += l.amt; days[k].cogs += lineCost(l); }
+  const rows = [['Date','Product','POS sold kg','POS takings $','Cost of sold $','Profit $'],
     ...Object.keys(days).sort().map(k => { const [d,n] = k.split('|');
-      return [d, n, days[k].kg.toFixed(3), days[k].amt.toFixed(2)]; })];
+      return [d, n, days[k].kg.toFixed(3), days[k].amt.toFixed(2),
+              days[k].cogs.toFixed(2), (days[k].amt - days[k].cogs).toFixed(2)]; })];
   dl(rows.map(r=>r.join(',')).join('\n'), 'pos-sales-'+repFrom+'-to-'+repTo+'.csv', 'text/csv');
+}
+function stockView(){
+  const low = lowStock();
+  const val = products.reduce((s,p) => s + Math.max(0, p.stock||0) * (p.cost||0), 0);
+  const rows = products.map(p => {
+    const isLow = p.low > 0 && p.stock <= p.low;
+    return `<tr${isLow?' style="color:var(--red);font-weight:bold"':''}>
+      <td>${esc(p.name)}${isLow?' ⚠':''}</td>
+      <td class="n">${(p.stock||0).toFixed(3)} ${esc(p.unit)}</td>
+      <td class="n">${p.low > 0 ? p.low : '—'}</td>
+      <td class="n">${fmt(Math.max(0, p.stock||0) * (p.cost||0))}</td></tr>`; }).join('');
+  return `<div class="kpis">
+      <div class="kpi"><b>${fmt(val)}</b><span>Stock on hand (at cost)</span></div>
+      <div class="kpi"${low.length?' style="outline:2px solid var(--red)"':''}>
+        <b>${low.length}</b><span>Need restocking</span></div>
+    </div>
+    ${low.length ? `<div class="salecard" style="border-left:4px solid var(--red)">
+      <b style="color:var(--red)">Restock now:</b>
+      <div class="lines">${low.map(p => esc(p.name)+' — '+(p.stock||0).toFixed(3)+' '+esc(p.unit)+' left').join('<br>')}</div>
+    </div>` : ''}
+    <table><tr><th>Product</th><th class="n">On hand</th><th class="n">Alert @</th><th class="n">Value $</th></tr>${rows}</table>
+    <div class="note">Stock counts down with every sale and back up if a sale is voided.
+      Enter deliveries and stock-take corrections in <b>Items</b> — the stock box there is this
+      live figure. Set <b>low @</b> above 0 on an item to get the red restock alert here and on
+      the Reports screen. Reports → <b>Restock value</b> tells you what the goods sold in a date
+      range cost to replace.</div>`;
 }
 function itemsAdmin(){
   const opts = cats().map(c=>`<option>${esc(c)}</option>`).join('');
   const rows = products.map((p,i) =>
-    `<div class="itemrow">
-      <input class="nm" value="${esc(p.name)}" onchange="products[${i}].name=this.value">
-      <input class="un" value="${esc(p.unit)}" onchange="products[${i}].unit=this.value">
-      <input class="pr" type="number" step="0.01" value="${p.price}"
-             onchange="products[${i}].price=parseFloat(this.value)||0">
-      <input class="ct" value="${esc(p.cat)}" list="catlist" onchange="products[${i}].cat=this.value||'Other'">
-      <button class="del" onclick="delItem(${i})">✕</button>
+    `<div class="icard">
+      <div class="itemrow">
+        <input class="nm" value="${esc(p.name)}" onchange="products[${i}].name=this.value">
+        <input class="ct" value="${esc(p.cat)}" list="catlist" onchange="products[${i}].cat=this.value||'Other'">
+        <button class="del" onclick="delItem(${i})">✕</button>
+      </div>
+      <div class="itemrow lab">
+        <span class="un">unit</span><span class="pr">sell $</span><span class="co">cost $</span>
+        <span class="st">stock</span><span class="lo">low @</span>
+      </div>
+      <div class="itemrow" style="margin-bottom:0">
+        <input class="un" value="${esc(p.unit)}" onchange="products[${i}].unit=this.value">
+        <input class="pr" type="number" step="0.01" value="${p.price}"
+               onchange="products[${i}].price=parseFloat(this.value)||0">
+        <input class="co" type="number" step="0.01" value="${p.cost}"
+               onchange="products[${i}].cost=parseFloat(this.value)||0">
+        <input class="st" type="number" step="any" value="${p.stock}"
+               onchange="products[${i}].stock=parseFloat(this.value)||0">
+        <input class="lo" type="number" step="any" value="${p.low}"
+               onchange="products[${i}].low=parseFloat(this.value)||0">
+      </div>
     </div>`).join('');
   return `<datalist id="catlist">${opts}</datalist>${rows}
-    <button class="bigbtn grey" onclick="products.push({name:'New item',unit:'kg',price:0,cat:'Other'});render()">+ Add product line</button>
+    <button class="bigbtn grey" onclick="products.push({name:'New item',unit:'kg',price:0,cost:0,cat:'Other',stock:0,low:0});render()">+ Add product line</button>
     <button class="bigbtn" onclick="save();toast('Saved');render()">SAVE</button>
     <div class="note">Type a new category name in the category box to create it — it becomes a
       tile on the sell screen automatically. Product names must match the Excel workbook's
-      Products sheet EXACTLY, and prices must equal the workbook selling price (cost × 1.38),
-      or the daily figures won't line up with Daily Stock.</div>`;
+      Products sheet EXACTLY. <b>sell $</b> = workbook selling price (cost × 1.38); <b>cost $</b> =
+      workbook buy price per unit — this drives the profit and restock-value figures.
+      <b>stock</b> = what's on hand now (update it when deliveries arrive — sales count it down
+      automatically). <b>low @</b> = alert level: when stock falls to it, the item goes red on
+      the Stock tab. Leave low @ at 0 for no alert.</div>`;
 }
 function delItem(i){ ask('Delete "'+products[i].name+'"? Past sales of it stay in reports.', () => {
   products.splice(i,1); save(); render(); }); }

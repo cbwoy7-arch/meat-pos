@@ -25,13 +25,19 @@ Bottom-right tab, guarded by an on-screen **PIN pad** (default PIN **2026** — 
 Settings on day one). No browser pop-ups are used anywhere, so everything works inside an
 Android app shell.
 
-- **Reports** — any date range: total / cash / EcoCash / swipe split, sales-by-item in kg
-  and $, individual sales with **VOID** (voids stay on record, struck through — audit
-  trail, never deletion). **Copy** gives a paste-ready summary; **CSV** exports per-day
-  per-product figures.
-- **Items** — add/edit/delete product lines, prices, units, categories. Typing a new
-  category name creates a new tile on the sell screen. Names must match the Excel
-  workbook's Products sheet EXACTLY; prices = workbook selling price (cost × 1.38).
+- **Reports** — any date range: total / cash / EcoCash / swipe split, plus **restock
+  value** (what the goods sold cost to replace), **gross profit** and **margin %**;
+  sales-by-item in kg, $ and profit; individual sales with **VOID** (voids stay on
+  record, struck through — audit trail, never deletion). **Copy** gives a paste-ready
+  summary; **CSV** exports per-day per-product figures including cost and profit.
+- **Stock** — live stock on hand per product (counts down with every sale, back up on
+  void), total inventory value at cost, and a red **restock now** list of every item at
+  or below its alert level. A ⚠ appears on the tab itself whenever something is low.
+- **Items** — add/edit/delete product lines: name, category, unit, **sell $** (workbook
+  selling price = cost × 1.38), **cost $** (workbook buy price — drives profit and
+  restock figures), **stock** (on hand — type the new figure when deliveries arrive),
+  and **low @** (alert level; 0 = no alert). Typing a new category name creates a new
+  tile on the sell screen. Names must match the Excel workbook's Products sheet EXACTLY.
 - **Settings** — change PIN, receipt header/footer + printer setup, backup/restore all
   data (JSON), lock the office.
 
