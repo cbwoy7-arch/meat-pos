@@ -1,4 +1,4 @@
-const CACHE = 'meat-pos-v2';
+const CACHE = 'meat-pos-v3';
 const FILES = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
