@@ -391,7 +391,41 @@ function printSale(idOrSale){
   const txt = receiptText(s);
   if (shop.printer === 'bt') btPrint(txt);
   else if (shop.printer === 'rawbt') rawbtPrint(txt);
+  else if (shop.printer === 'pdf') pdfPrint(s);
   else shareTxt(txt);
+}
+// Hand-rolled single-page PDF (Courier, 58 mm slip width) — keeps the app dependency-free
+function pdfBlob(txt){
+  const lines = txt.split('\n');
+  const W = 164, LH = 9.6, H = Math.max(80, Math.round(lines.length * LH + 26));
+  const escP = s => s.replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
+  const content = 'BT /F1 8 Tf ' + LH + ' TL 1 0 0 1 5 ' + (H - 14) + ' Tm\n' +
+    lines.map(l => '(' + escP(l) + ') Tj T*\n').join('') + 'ET';
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + W + ' ' + H + '] ' +
+      '/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>',
+    '<< /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream'
+  ];
+  let pdf = '%PDF-1.4\n'; const offs = [];
+  objs.forEach((o, i) => { offs.push(pdf.length); pdf += (i+1) + ' 0 obj\n' + o + '\nendobj\n'; });
+  const xref = pdf.length;
+  pdf += 'xref\n0 ' + (objs.length + 1) + '\n0000000000 65535 f \n' +
+    offs.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('') +
+    'trailer\n<< /Size ' + (objs.length + 1) + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF';
+  return new Blob([pdf], {type:'application/pdf'});
+}
+async function pdfPrint(s){
+  const blob = pdfBlob(receiptText(s));
+  const name = 'receipt-' + s.date + '-' + String(s.id).slice(-6) + '.pdf';
+  try {
+    const file = new File([blob], name, {type:'application/pdf'});
+    if (navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title:'Receipt'}); return; }
+  } catch(e){ if (e.name === 'AbortError') return; }   // user closed the share sheet
+  dl(blob, name, 'application/pdf'); toast('Receipt PDF downloaded');
 }
 function testPrint(){ printSale({ id:Date.now(), date:today(),
   time:new Date().toTimeString().slice(0,5), pay:'Cash', total:5, void:false,
@@ -650,6 +684,7 @@ function settingsView(){
       <div class="itemrow">
         <select style="flex:1" onchange="shop.printer=this.value;saveShop();render()">
           <option value="off" ${prn==='off'?'selected':''}>No printer — share receipt as text</option>
+          <option value="pdf" ${prn==='pdf'?'selected':''}>Save / share receipt as PDF</option>
           <option value="bt" ${prn==='bt'?'selected':''}>Bluetooth thermal printer (direct)</option>
           <option value="rawbt" ${prn==='rawbt'?'selected':''}>RawBT print app</option>
         </select></div>
@@ -665,6 +700,10 @@ function settingsView(){
           Bluetooth and USB printers.</div>` : ''}
       ${prn==='off' ? `<div class="note">Print buttons open the Android share sheet with the
           receipt text — send it to a printer app or WhatsApp.</div>` : ''}
+      ${prn==='pdf' ? `<button class="bigbtn grey" onclick="testPrint()">Test PDF</button>
+        <div class="note">Print buttons create a till-slip PDF on the phone (works offline) and
+          open the share sheet — send it to WhatsApp, save it to Drive, or print it from any
+          printer app. If sharing isn't available the PDF downloads instead.</div>` : ''}
       <label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px">
         <input type="checkbox" ${shop.auto?'checked':''}
                onchange="shop.auto=this.checked;saveShop()">
@@ -697,8 +736,9 @@ function restore(){ const inp = document.createElement('input'); inp.type = 'fil
       } catch(e){ toast('Not a valid backup file', true); } }); };
   inp.click();
 }
-function dl(text, name, type){ const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([text], {type})); a.download = name; a.click();
+function dl(data, name, type){ const a = document.createElement('a');
+  a.href = URL.createObjectURL(data instanceof Blob ? data : new Blob([data], {type}));
+  a.download = name; a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href), 5000); }
 
 // ---------------- boot ----------------

@@ -52,6 +52,9 @@ Three printer modes in Settings → Receipts:
 
 - **No printer (default)** — the print button opens the Android share sheet with the
   receipt text; send it to WhatsApp or any printer app.
+- **Save / share as PDF** — generates a till-slip PDF on the phone (fully offline) and
+  opens the share sheet: WhatsApp it to the customer, save it to Drive, or print it
+  from any printer app. Downloads the file if sharing isn't available.
 - **Bluetooth thermal printer (direct)** — for Bluetooth-LE ESC/POS printers (most
   cheap 58 mm ones sold as "BLE" or "app printing"). Tap **Choose printer** once, then
   **Test print**. No extra app needed.
