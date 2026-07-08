@@ -94,7 +94,7 @@
   /* office */
   .subnav { display:flex; gap:6px; margin-bottom:10px; }
   .subnav button { flex:1; padding:10px 0; border:1px solid #b0bec5; background:#fff;
-                   border-radius:8px; font-size:13px; font-weight:bold; color:#607d8b; }
+                   border-radius:8px; font-size:12px; font-weight:bold; color:#607d8b; }
   .subnav button.on { background:var(--dark); color:#fff; border-color:var(--dark); }
   .kpis { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:8px 0; }
   .kpi { background:#fff; border-radius:10px; padding:10px; text-align:center;
@@ -181,6 +181,23 @@
   </div>
 </div>
 
+<div class="overlay" id="adjmodal" style="align-items:center">
+  <div class="card" style="border-radius:16px;margin:0 20px">
+    <h2 id="adj-title">Adjust stock</h2>
+    <div class="note" id="adj-cur" style="margin:4px 0 10px"></div>
+    <input id="adj-qty" type="number" inputmode="decimal" step="any"
+           style="width:100%;font-size:24px;padding:10px;border:2px solid var(--green);border-radius:10px;text-align:center"
+           placeholder="true quantity">
+    <input id="adj-why"
+           style="width:100%;margin-top:8px;padding:10px;border:1px solid #cfd8dc;border-radius:8px;font-size:14px"
+           placeholder="Reason (required — e.g. stock-take, spoilage)">
+    <div class="mbtns" style="margin-top:10px">
+      <button class="cancel" onclick="adjClose()">Cancel</button>
+      <button class="ok" onclick="adjSave()">SAVE</button>
+    </div>
+  </div>
+</div>
+
 <div id="pinwrap">
   <div id="pintitle">Enter owner PIN</div>
   <div id="pindots"><i></i><i></i><i></i><i></i></div>
@@ -227,9 +244,12 @@ for (const p of products){                               // migrate older data
   if (p.low == null) p.low = 0;                          // 0 = no restock alert
 }
 let sales = load('mc_sales', []);
+let deliveries = load('mc_deliveries', []);
+let audit = load('mc_audit', []);
 let ticket = [], tab = 'sell', view = 'cats', selCat = null;
 let office = 'reports', pinOK = false, cur = null, mode = 'kg';
 let repFrom = today(), repTo = today();
+let itemsSnap = null, adjIdx = null;
 let shop = load('mc_shop', { name:'Meat Centre', line2:'', footer:'Thank you, come again!',
                              printer:'off', auto:false });
 let lastSaleId = null;
@@ -237,7 +257,13 @@ function saveShop(){ localStorage.setItem('mc_shop', JSON.stringify(shop)); }
 
 function load(k, d){ try { return JSON.parse(localStorage.getItem(k)) || d; } catch(e){ return d; } }
 function save(){ localStorage.setItem('mc_products', JSON.stringify(products));
-                 localStorage.setItem('mc_sales', JSON.stringify(sales)); }
+                 localStorage.setItem('mc_sales', JSON.stringify(sales));
+                 localStorage.setItem('mc_deliveries', JSON.stringify(deliveries));
+                 localStorage.setItem('mc_audit', JSON.stringify(audit)); }
+function logAudit(type, detail){
+  audit.push({date:today(), time:new Date().toTimeString().slice(0,5), type, detail});
+  if (audit.length > 2000) audit = audit.slice(-1500);   // keep the log from growing forever
+}
 function today(){ const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function fmt(n){ return '$'+n.toFixed(2); }
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
@@ -510,15 +536,19 @@ function closeConfirm(yes){ document.getElementById('confirm').classList.remove(
 
 // ---------------- BACK OFFICE ----------------
 function officeView(){
+  if (office !== 'items') itemsSnap = null;
   const sub = `<div class="subnav">
     <button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>
+    <button class="${office==='goods'?'on':''}" onclick="office='goods';render()">Goods In</button>
     <button class="${office==='stock'?'on':''}" onclick="office='stock';render()">Stock${lowStock().length?' ⚠':''}</button>
     <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
-    <button class="${office==='settings'?'on':''}" onclick="office='settings';render()">Settings</button>
+    <button class="${office==='settings'||office==='audit'?'on':''}" onclick="office='settings';render()">Settings</button>
   </div>`;
   if (office==='reports') return sub + reportsView();
+  if (office==='goods') return sub + deliveriesView();
   if (office==='stock') return sub + stockView();
   if (office==='items') return sub + itemsAdmin();
+  if (office==='audit') return sub + auditView();
   return sub + settingsView();
 }
 function rangeSales(){ return sales.filter(s => s.date >= repFrom && s.date <= repTo); }
@@ -570,15 +600,19 @@ function reportsView(){
     <table><tr><th>Product</th><th class="n">Sold kg</th><th class="n">Takings $</th><th class="n">Profit $</th></tr>
       ${rows || '<tr><td colspan="4" style="color:#999">No sales in this range</td></tr>'}</table>
     ${cards}
-    <div class="note">Daily close: set both dates to today, then enter each line's Sold kg into
-      the workbook's <b>Daily Stock → POS sold kg</b>. Cash goes to Till Rec's Cash column;
-      EcoCash + Swipe together go to the EcoCash/transfers column. Voided sales stay on
-      record but are excluded from totals.</div>`;
+    <div class="note">This app is now the full system — the Excel workbook is retired.
+      Deliveries go in through <b>Goods In</b> (never by editing stock directly); stock
+      corrections go through <b>Items → stock</b> with a reason. Daily Close (blind stock
+      count + till reconciliation) arrives in the next update — until then, keep the evening
+      scale count on paper and compare it to the Stock tab. Voided sales stay on record but
+      are excluded from totals.</div>`;
 }
 function voidSale(id){ ask('Void this sale? It stays on record but is removed from totals.', () => {
   const s = sales.find(x=>x.id===id); if (s) { s.void = true;
     for (const l of s.lines){ const p = products.find(x => x.name === l.name);
       if (p) p.stock = round3((p.stock||0) + l.kg); }        // goods go back on the shelf
+    logAudit('void', s.date+' '+s.time+' '+s.pay+' sale '+fmt(s.total)+' — '+
+      s.lines.map(l=>l.name+' '+l.kg.toFixed(3)).join(', '));
     save(); render(); } }); }
 function copySummary(){ const a = agg();
   const tot = Object.values(a).reduce((s,x)=>s+x.amt,0);
@@ -602,6 +636,106 @@ function csv(){ const days = {};
               days[k].cogs.toFixed(2), (days[k].amt - days[k].cogs).toFixed(2)]; })];
   dl(rows.map(r=>r.join(',')).join('\n'), 'pos-sales-'+repFrom+'-to-'+repTo+'.csv', 'text/csv');
 }
+function deliveriesView(){
+  const opts = products.map(p=>`<option>${esc(p.name)}</option>`).join('');
+  const unpaid = deliveries.filter(d=>!d.paid);
+  const owing = {};
+  for (const d of unpaid) owing[d.supplier] = (owing[d.supplier]||0) + d.invKg*d.cost;
+  const oweTotal = Object.values(owing).reduce((s,x)=>s+x,0);
+  const cards = [...deliveries].reverse().slice(0,30).map(d => {
+    const short = round3(d.wKg - d.invKg);
+    return `<div class="salecard">
+      <div class="top"><span>${d.date} ${d.time} · ${esc(d.supplier)}</span><span>${fmt(d.invKg*d.cost)}
+        ${d.paid ? '<span style="color:var(--greend)">PAID</span>'
+          : `<button class="voidbtn" style="border-color:var(--greend);color:var(--greend)" onclick="markPaid(${d.id})">MARK PAID</button>`}</span></div>
+      <div class="lines">${esc(d.item)} — invoiced ${d.invKg.toFixed(3)}, weighed ${d.wKg.toFixed(3)} ${esc(d.unit)} @ ${fmt(d.cost)}
+        ${short < 0 ? `<span style="color:var(--red);font-weight:bold"> SHORT ${Math.abs(short).toFixed(3)} — claim it</span>`
+          : short > 0 ? ` (over by ${short.toFixed(3)})` : ''}${d.note ? ' · '+esc(d.note) : ''}</div>
+    </div>`; }).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">New delivery — weigh it on YOUR scale before signing</b>
+      <div class="itemrow" style="margin-top:8px">
+        <input id="d-sup" style="flex:1.4" placeholder="Supplier">
+        <select id="d-item" style="flex:1.4"><option value="">— item —</option>${opts}</select>
+      </div>
+      <div class="itemrow lab">
+        <span style="flex:1">invoiced qty</span><span style="flex:1">weighed qty</span><span style="flex:1">cost $/unit</span>
+      </div>
+      <div class="itemrow">
+        <input id="d-inv" type="number" inputmode="decimal" step="any" style="flex:1" placeholder="0.000">
+        <input id="d-w" type="number" inputmode="decimal" step="any" style="flex:1" placeholder="0.000">
+        <input id="d-cost" type="number" inputmode="decimal" step="0.01" style="flex:1" placeholder="0.00">
+      </div>
+      <div class="itemrow" style="margin-bottom:0">
+        <input id="d-note" style="flex:1" placeholder="Note (optional)">
+        <label style="display:flex;gap:6px;align-items:center;font-size:14px">
+          <input id="d-paid" type="checkbox">Paid</label>
+      </div>
+      <button class="bigbtn" onclick="addDelivery()">RECEIVE INTO STOCK</button>
+    </div>
+    ${unpaid.length ? `<div class="salecard" style="border-left:4px solid #fb8c00">
+      <b>Owing to suppliers: ${fmt(oweTotal)}</b>
+      <div class="lines">${Object.entries(owing).map(([s,v])=>esc(s)+' — '+fmt(v)).join('<br>')}</div>
+    </div>` : ''}
+    ${cards}
+    <div class="note">Weighed qty goes into stock; you PAY on invoiced qty — any shortage is claimed
+      from the supplier, and it shows red above so it isn't forgotten. The item's cost price updates
+      from the delivery automatically. Showing the last 30 deliveries.</div>`;
+}
+function addDelivery(){
+  const g = id => document.getElementById(id);
+  const name = g('d-item').value;
+  const p = products.find(x => x.name === name);
+  const invKg = parseFloat(g('d-inv').value), wKg = parseFloat(g('d-w').value), cost = parseFloat(g('d-cost').value);
+  if (!p){ toast('Choose an item', true); return; }
+  if (!(invKg > 0) || !(wKg > 0)){ toast('Enter invoiced AND weighed quantities', true); return; }
+  if (!(cost > 0)){ toast('Enter the cost per '+p.unit, true); return; }
+  const d = {id:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+             supplier:(g('d-sup').value.trim() || 'Unknown'), item:name, unit:p.unit,
+             invKg:round3(invKg), wKg:round3(wKg), cost:round2(cost),
+             paid:g('d-paid').checked, note:g('d-note').value.trim()};
+  deliveries.push(d);
+  p.stock = round3((p.stock||0) + d.wKg);
+  if (round2(cost) !== p.cost){
+    logAudit('cost-change', p.name+': cost '+fmt(p.cost||0)+' → '+fmt(round2(cost))+' (delivery, '+d.supplier+')');
+    p.cost = round2(cost);
+  }
+  logAudit('delivery', d.item+' +'+d.wKg.toFixed(3)+' '+d.unit+' @ '+fmt(d.cost)+' from '+d.supplier+(d.paid?' (paid)':' (on account)'));
+  const short = round3(d.wKg - d.invKg);
+  save(); render();
+  toast(short < 0 ? 'Received — SHORT '+Math.abs(short).toFixed(3)+' '+d.unit+', claim it!'
+                  : 'Delivery received into stock');
+}
+function markPaid(id){ const d = deliveries.find(x => x.id === id); if (!d) return;
+  ask('Mark this delivery as paid? '+d.item+' from '+d.supplier+' — '+fmt(d.invKg*d.cost), () => {
+    d.paid = true;
+    logAudit('delivery-paid', d.item+' from '+d.supplier+' — '+fmt(d.invKg*d.cost));
+    save(); render(); }); }
+function auditView(){
+  const cards = [...audit].reverse().slice(0,100).map(a =>
+    `<div class="salecard"><div class="top"><span>${a.date} ${a.time}</span>
+      <span style="color:#607d8b">${esc(a.type)}</span></div>
+     <div class="lines">${esc(a.detail)}</div></div>`).join('');
+  return `<div class="note" style="margin:0 0 4px">Append-only record of every sensitive change
+      (deliveries, stock adjustments, price/cost changes, voids, restores). It cannot be edited
+      from inside the app. Showing the last 100 entries.</div>
+    ${cards || '<div class="note">Nothing logged yet.</div>'}`;
+}
+function adjOpen(i){ adjIdx = i; const p = products[i];
+  document.getElementById('adj-title').textContent = 'Adjust stock — '+p.name;
+  document.getElementById('adj-cur').textContent = 'App expects '+(p.stock||0).toFixed(3)+' '+p.unit+'. Enter the true figure and why it differs.';
+  document.getElementById('adj-qty').value = ''; document.getElementById('adj-why').value = '';
+  document.getElementById('adjmodal').classList.add('open'); }
+function adjClose(){ document.getElementById('adjmodal').classList.remove('open'); }
+function adjSave(){ const p = products[adjIdx]; if (!p) return;
+  const v = parseFloat(document.getElementById('adj-qty').value);
+  const why = document.getElementById('adj-why').value.trim();
+  if (isNaN(v)){ toast('Enter the true quantity', true); return; }
+  if (!why){ toast('A reason is required', true); return; }
+  logAudit('stock-adjust', p.name+': '+(p.stock||0).toFixed(3)+' → '+v.toFixed(3)+' '+p.unit+' — '+why);
+  p.stock = round3(v);
+  adjClose(); save(); render(); toast('Stock adjusted');
+}
 function stockView(){
   const low = lowStock();
   const val = products.reduce((s,p) => s + Math.max(0, p.stock||0) * (p.cost||0), 0);
@@ -622,13 +756,14 @@ function stockView(){
       <div class="lines">${low.map(p => esc(p.name)+' — '+(p.stock||0).toFixed(3)+' '+esc(p.unit)+' left').join('<br>')}</div>
     </div>` : ''}
     <table><tr><th>Product</th><th class="n">On hand</th><th class="n">Alert @</th><th class="n">Value $</th></tr>${rows}</table>
-    <div class="note">Stock counts down with every sale and back up if a sale is voided.
-      Enter deliveries and stock-take corrections in <b>Items</b> — the stock box there is this
-      live figure. Set <b>low @</b> above 0 on an item to get the red restock alert here and on
-      the Reports screen. Reports → <b>Restock value</b> tells you what the goods sold in a date
-      range cost to replace.</div>`;
+    <div class="note">Stock rises through <b>Goods In</b> deliveries, falls with every sale,
+      goes back up if a sale is voided, and is corrected only through <b>Items → stock</b>
+      (reason required, every change logged). Set <b>low @</b> above 0 on an item to get the
+      red restock alert here and on the Reports screen. Reports → <b>Restock value</b> tells
+      you what the goods sold in a date range cost to replace.</div>`;
 }
 function itemsAdmin(){
+  if (!itemsSnap) itemsSnap = products.map(p => ({name:p.name, price:p.price, cost:p.cost}));
   const opts = cats().map(c=>`<option>${esc(c)}</option>`).join('');
   const rows = products.map((p,i) =>
     `<div class="icard">
@@ -639,7 +774,7 @@ function itemsAdmin(){
       </div>
       <div class="itemrow lab">
         <span class="un">unit</span><span class="pr">sell $</span><span class="co">cost $</span>
-        <span class="st">stock</span><span class="lo">low @</span>
+        <span class="st">stock ✎</span><span class="lo">low @</span>
       </div>
       <div class="itemrow" style="margin-bottom:0">
         <input class="un" value="${esc(p.unit)}" onchange="products[${i}].unit=this.value">
@@ -647,24 +782,35 @@ function itemsAdmin(){
                onchange="products[${i}].price=parseFloat(this.value)||0">
         <input class="co" type="number" step="0.01" value="${p.cost}"
                onchange="products[${i}].cost=parseFloat(this.value)||0">
-        <input class="st" type="number" step="any" value="${p.stock}"
-               onchange="products[${i}].stock=parseFloat(this.value)||0">
+        <button class="st" style="background:#fafafa;border:1px solid #cfd8dc;border-radius:8px;
+                padding:9px 2px;font-size:13px;color:var(--text)"
+                onclick="adjOpen(${i})">${(p.stock||0).toFixed(2)}</button>
         <input class="lo" type="number" step="any" value="${p.low}"
                onchange="products[${i}].low=parseFloat(this.value)||0">
       </div>
     </div>`).join('');
   return `<datalist id="catlist">${opts}</datalist>${rows}
     <button class="bigbtn grey" onclick="products.push({name:'New item',unit:'kg',price:0,cost:0,cat:'Other',stock:0,low:0});render()">+ Add product line</button>
-    <button class="bigbtn" onclick="save();toast('Saved');render()">SAVE</button>
+    <button class="bigbtn" onclick="saveItems()">SAVE</button>
     <div class="note">Type a new category name in the category box to create it — it becomes a
-      tile on the sell screen automatically. Product names must match the Excel workbook's
-      Products sheet EXACTLY. <b>sell $</b> = workbook selling price (cost × 1.38); <b>cost $</b> =
-      workbook buy price per unit — this drives the profit and restock-value figures.
-      <b>stock</b> = what's on hand now (update it when deliveries arrive — sales count it down
-      automatically). <b>low @</b> = alert level: when stock falls to it, the item goes red on
-      the Stock tab. Leave low @ at 0 for no alert.</div>`;
+      tile on the sell screen automatically. <b>sell $</b> = selling price (cost × 1.38 rule);
+      <b>cost $</b> = buy price per unit — drives profit and restock figures. <b>stock</b> is
+      read-only here: deliveries add to it through <b>Goods In</b>, and corrections go through
+      the stock button (tap the figure — a reason is required and every change is logged).
+      <b>low @</b> = restock alert level (0 = no alert). Price and cost changes are logged to
+      the audit trail when you press SAVE.</div>`;
+}
+function saveItems(){
+  for (const p of products){
+    const s = itemsSnap && itemsSnap.find(x => x.name === p.name);
+    if (!s){ logAudit('item-added', p.name+' — sell '+fmt(p.price)+', cost '+fmt(p.cost)); continue; }
+    if (s.price !== p.price) logAudit('price-change', p.name+': sell '+fmt(s.price)+' → '+fmt(p.price));
+    if (s.cost !== p.cost) logAudit('cost-change', p.name+': cost '+fmt(s.cost)+' → '+fmt(p.cost));
+  }
+  itemsSnap = null; save(); toast('Saved'); render();
 }
 function delItem(i){ ask('Delete "'+products[i].name+'"? Past sales of it stay in reports.', () => {
+  logAudit('item-deleted', products[i].name+' (stock at deletion: '+(products[i].stock||0).toFixed(3)+')');
   products.splice(i,1); save(); render(); }); }
 function settingsView(){
   const prn = shop.printer;
@@ -709,6 +855,8 @@ function settingsView(){
                onchange="shop.auto=this.checked;saveShop()">
         Print automatically after every sale</label>
     </div>
+    <div class="setrow"><span>Audit log</span>
+      <button onclick="office='audit';render()">View</button></div>
     <div class="setrow"><span>Backup all data</span>
       <button onclick="backup()">Download</button></div>
     <div class="setrow"><span>Restore from backup</span>
@@ -724,7 +872,8 @@ function changePin(){ pinAsk('Enter NEW 4-digit PIN', p1 =>
     if (p1 === p2) { localStorage.setItem('mc_pin', p1); toast('PIN changed'); }
     else toast('PINs did not match', true);
   })); }
-function backup(){ dl(JSON.stringify({products, sales, shop}), 'meat-pos-backup-'+today()+'.json', 'application/json'); }
+function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, audit}),
+  'meat-pos-backup-'+today()+'.json', 'application/json'); }
 function restore(){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json';
   inp.onchange = () => { const f = inp.files[0]; if (!f) return;
     f.text().then(t => { try { const d = JSON.parse(t);
@@ -732,6 +881,9 @@ function restore(){ const inp = document.createElement('input'); inp.type = 'fil
         ask('Replace ALL data on this device with the backup?', () => {
           products = d.products; sales = d.sales;
           if (d.shop) { shop = d.shop; saveShop(); }
+          if (Array.isArray(d.deliveries)) deliveries = d.deliveries;
+          if (Array.isArray(d.audit)) audit = d.audit;
+          logAudit('restore', 'all data replaced from backup file');
           save(); render(); toast('Backup restored'); });
       } catch(e){ toast('Not a valid backup file', true); } }); };
   inp.click();

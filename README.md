@@ -30,16 +30,29 @@ Android app shell.
   sales-by-item in kg, $ and profit; individual sales with **VOID** (voids stay on
   record, struck through — audit trail, never deletion). **Copy** gives a paste-ready
   summary; **CSV** exports per-day per-product figures including cost and profit.
-- **Stock** — live stock on hand per product (counts down with every sale, back up on
-  void), total inventory value at cost, and a red **restock now** list of every item at
-  or below its alert level. A ⚠ appears on the tab itself whenever something is low.
-- **Items** — add/edit/delete product lines: name, category, unit, **sell $** (workbook
-  selling price = cost × 1.38), **cost $** (workbook buy price — drives profit and
-  restock figures), **stock** (on hand — type the new figure when deliveries arrive),
-  and **low @** (alert level; 0 = no alert). Typing a new category name creates a new
-  tile on the sell screen. Names must match the Excel workbook's Products sheet EXACTLY.
-- **Settings** — change PIN, receipt header/footer + printer setup, backup/restore all
-  data (JSON), lock the office.
+- **Goods In** — every delivery is received here: supplier, item, **invoiced qty vs
+  your own scale's weighed qty**, cost per unit, paid or on account. The weighed qty
+  goes into stock automatically and the item's cost price updates; you pay on the
+  invoiced qty, and any shortage shows red — claim it from the supplier. Unpaid
+  deliveries roll into an **Owing to suppliers** list (your creditors, live).
+- **Stock** — live stock on hand per product (up via Goods In, down with every sale,
+  back up on void), total inventory value at cost, and a red **restock now** list of
+  every item at or below its alert level. A ⚠ appears on the tab when something is low.
+- **Items** — add/edit/delete product lines: name, category, unit, **sell $** (cost ×
+  1.38 rule), **cost $** (buy price — drives profit and restock figures), and **low @**
+  (alert level; 0 = no alert). **Stock is read-only here** — deliveries add to it via
+  Goods In; corrections go through the stock button, which demands a reason and logs the
+  change. Price and cost edits are logged to the audit trail when you press SAVE.
+- **Settings** — change PIN, receipt header/footer + printer setup, **audit log viewer**,
+  backup/restore all data (JSON), lock the office.
+
+## The audit trail
+
+Every sensitive action writes an append-only entry the app itself cannot edit or delete:
+deliveries, payments to suppliers, stock adjustments (with the reason), price and cost
+changes, voids, and backup restores. Settings → Audit log shows the last 100. If a number
+looks wrong, the trail says who-did-what-when — that is the difference between a mistake
+and a mystery.
 
 ## Receipts & thermal printing
 
@@ -64,11 +77,13 @@ Three printer modes in Settings → Receipts:
 
 There is also a **Print automatically after every sale** switch once a printer is set up.
 
-## Daily close (feeds the Excel control)
+## Daily close (interim — until the built-in Daily Close ships)
 
-Reports → set both dates to today → enter each line's **Sold kg** into the workbook's
-**Daily Stock → POS sold kg** column. **Cash** goes to Till Rec's cash column;
-**EcoCash + Swipe together** go to the EcoCash/transfers column.
+The Excel workbook is **retired** — this app is the system of record. Until the built-in
+Daily Close (blind stock count + till reconciliation, next update) arrives: weigh every
+line at closing, write the counts on paper, compare against the **Stock** tab, and count
+the till against the Reports cash/EcoCash/swipe split. Investigate any line off by more
+than **0.2 kg** or a till gap beyond **±2%**.
 
 ## Getting it on the phone
 
@@ -100,9 +115,12 @@ version in the background, the second one runs it.
   that is the sales record.
 - **Backup weekly** (Settings → Backup) and before any phone repair/reset; save the file
   to Google Drive. Restore reloads it onto any device.
-- One live till by design — devices don't sync; the Excel workbook is the master record.
+- One live till by design — devices don't sync. **This app is the master record** — the
+  Excel workbook is retired, which makes the weekly backup non-negotiable.
 
 ## Known limits (deliberate, for now)
 
 - No multi-device sync.
+- Daily Close (blind count + till reconciliation), cutting-yield log, and the monthly
+  archive export arrive in the next updates.
 - Not ZIMRA-fiscalised — fine until VAT registration (~Feb–Mar 2027); revisit then.
