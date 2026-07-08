@@ -30,7 +30,13 @@ Android app shell.
   sales-by-item in kg, $ and profit; individual sales with **VOID** (voids stay on
   record, struck through — audit trail, never deletion). **Copy** gives a paste-ready
   summary; **CSV** exports per-day per-product figures including cost and profit.
-  Below the sales figures sits the **controls dashboard** for the same date range:
+  Then the **Day P&L**: gross profit less a daily share of the monthly overheads
+  (set in Settings, absorbed per working day — closed days still carry overhead) =
+  **net operating profit**, plus the **break-even sales/day** figure and, while the
+  loan runs, an **"after loan"** line (financing shown separately, never mixed into
+  operating profit). A per-day table shows every trading day's sales, GP, overhead
+  and net — loss-making days go red.
+  Below that sits the **controls dashboard** for the same date range:
   till gap across the closes, missing stock at retail, cutting yield and waste,
   cutting uplift, what's owing to suppliers right now, and the single number that
   matters — **Leakage** (missing stock + till shortfall), red whenever it isn't zero.
@@ -61,8 +67,10 @@ Android app shell.
   Goods In; corrections go through the stock button, which demands a reason and logs the
   change. Price and cost edits are logged to the audit trail when you press SAVE.
 - **Settings** — change PIN, receipt header/footer + printer setup, **Daily Close
-  tolerances**, the **month-end archive**, **audit log viewer**, backup/restore all
-  data (JSON), lock the office.
+  tolerances**, **monthly overheads & loan** (editable list ÷ working days = the
+  daily rate; prefilled from the business plan; delete the equipment-hire line in
+  month 13, zero the loan at month 12), the **month-end archive**, **audit log
+  viewer**, backup/restore all data (JSON), lock the office.
 
 ## Month-end archive (the VAT / tax record base)
 

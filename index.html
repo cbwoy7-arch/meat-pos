@@ -258,6 +258,12 @@ let shop = load('mc_shop', { name:'Meat Centre', line2:'', footer:'Thank you, co
                              printer:'off', auto:false, tolKg:0.2, tolTill:0.02 });
 if (shop.tolKg == null) shop.tolKg = 0.2;      // count tolerance per line
 if (shop.tolTill == null) shop.tolTill = 0.02; // till tolerance (fraction of takings)
+if (!Array.isArray(shop.ovh)) shop.ovh = [     // monthly overheads (from the Vision model)
+  {name:'Rent & utilities', amt:230.77}, {name:'Wages', amt:200},
+  {name:'Staff lunch', amt:30}, {name:'Licensing', amt:46.03},
+  {name:'Equipment hire (yr 1)', amt:110}];
+if (shop.wdays == null) shop.wdays = 30;       // working days per month (overhead divisor)
+if (shop.loan == null) shop.loan = 580.18;     // loan repayment $/mo — financing, shown separately
 let lastSaleId = null;
 function saveShop(){ localStorage.setItem('mc_shop', JSON.stringify(shop)); }
 
@@ -589,6 +595,28 @@ function reportsView(){
   const waste = round3(rb.reduce((s,b)=>s+b.waste,0));
   const uplift = round2(rb.reduce((s,b)=>s+b.uplift,0));
   const owe = round2(deliveries.filter(d=>!d.paid).reduce((s,d)=>s+d.invKg*d.cost,0));
+  // Day P&L: absorb monthly overheads at a daily rate over the calendar days in range
+  const totOvh = round2(shop.ovh.reduce((s,o)=>s+(o.amt||0),0));
+  const dailyOvh = totOvh/(shop.wdays||30);
+  const days = Math.max(1, Math.round((new Date(repTo)-new Date(repFrom))/86400000)+1);
+  const ovhRange = round2(dailyOvh*days);
+  const netOp = round2(tot - cogs - ovhRange);
+  const marginR = tot > 0 ? (tot-cogs)/tot : 0;
+  const beDay = marginR > 0 ? round2(dailyOvh/marginR) : null;
+  const loanDay = (shop.loan||0)/(shop.wdays||30);
+  const afterLoan = round2(netOp - loanDay*days);
+  const byDay = {};
+  for (const s of live){
+    byDay[s.date] = byDay[s.date] || {sales:0, cogs:0};
+    byDay[s.date].sales += s.total;
+    for (const l of s.lines) byDay[s.date].cogs += lineCost(l);
+  }
+  const dayRows = Object.keys(byDay).sort().map(d => {
+    const x = byDay[d], gp = x.sales - x.cogs, net = round2(gp - dailyOvh);
+    return `<tr${net<0?' style="color:var(--red);font-weight:bold"':''}>
+      <td>${d.slice(5)}</td><td class="n">${fmt(round2(x.sales))}</td>
+      <td class="n">${fmt(round2(gp))}</td><td class="n">${fmt(round2(dailyOvh))}</td>
+      <td class="n">${fmt(net)}</td></tr>`; }).join('');
   const names = [...products.map(p=>p.name), ...Object.keys(a).filter(n=>!products.some(p=>p.name===n))];
   const rows = names.filter(n=>a[n]).map(n =>
     `<tr><td>${esc(n)}</td><td class="n">${a[n].kg.toFixed(3)}</td><td class="n">${fmt(a[n].amt)}</td>
@@ -620,6 +648,18 @@ function reportsView(){
       <div class="kpi"${lowStock().length?' style="outline:2px solid var(--red)"':''}>
         <b>${lowStock().length}</b><span>Need restocking → Stock tab</span></div>
     </div>
+    <div class="note" style="margin:2px 0 4px"><b>Day P&amp;L</b> — overheads absorbed at
+      ${fmt(round2(dailyOvh))}/working day over ${days} calendar day${days===1?'':'s'}
+      (closed days still carry overhead):</div>
+    <div class="kpis">
+      <div class="kpi"><b>${fmt(ovhRange)}</b><span>Overheads (${days} day${days===1?'':'s'})</span></div>
+      <div class="kpi"${netOp<0?' style="outline:2px solid var(--red)"':''}>
+        <b>${fmt(netOp)}</b><span>Net operating profit</span></div>
+      <div class="kpi"><b>${beDay===null?'—':fmt(beDay)}</b><span>Break-even sales / day</span></div>
+      ${shop.loan>0?`<div class="kpi"${afterLoan<0?' style="outline:2px solid var(--red)"':''}>
+        <b>${fmt(afterLoan)}</b><span>After loan (${fmt(round2(loanDay))}/day financing)</span></div>`:''}
+    </div>
+    ${dayRows?`<table style="margin-bottom:8px"><tr><th>Day</th><th class="n">Sales</th><th class="n">GP</th><th class="n">Ovh</th><th class="n">Net</th></tr>${dayRows}</table>`:''}
     <div class="note" style="margin:2px 0 4px"><b>Controls</b> — from the daily closes, cutting log and supplier book:</div>
     <div class="kpis">
       <div class="kpi"${tillGap<0?' style="outline:2px solid var(--red)"':''}>
@@ -1152,6 +1192,29 @@ function settingsView(){
       </div>
       <div class="note">Variances beyond these flag red at the Daily Close. Current: ${shop.tolKg} kg
         per line, ±${round2(shop.tolTill*100)}% on the till.</div>
+    </div>
+    <div class="ticket" style="margin-bottom:8px">
+      <b style="font-size:15px">Monthly overheads &amp; loan</b>
+      ${shop.ovh.map((o,i) => `<div class="itemrow"${i===0?' style="margin-top:8px"':''}>
+        <input style="flex:2" value="${esc(o.name)}" onchange="shop.ovh[${i}].name=this.value;saveShop()">
+        <input style="flex:1" type="number" step="0.01" value="${o.amt}"
+               onchange="shop.ovh[${i}].amt=parseFloat(this.value)||0;saveShop();render()">
+        <button class="del" onclick="shop.ovh.splice(${i},1);saveShop();render()">✕</button>
+      </div>`).join('')}
+      <button class="bigbtn grey" onclick="shop.ovh.push({name:'New overhead',amt:0});saveShop();render()">+ Add overhead</button>
+      <div class="itemrow lab" style="margin-top:8px">
+        <span style="flex:1">working days / month</span><span style="flex:1">loan repayment $/month</span>
+      </div>
+      <div class="itemrow" style="margin-bottom:0">
+        <input style="flex:1" type="number" step="1" value="${shop.wdays}"
+               onchange="shop.wdays=parseFloat(this.value)||30;saveShop();render()">
+        <input style="flex:1" type="number" step="0.01" value="${shop.loan}"
+               onchange="shop.loan=parseFloat(this.value)||0;saveShop();render()">
+      </div>
+      <div class="note">Total ${fmt(round2(shop.ovh.reduce((s,o)=>s+(o.amt||0),0)))}/month =
+        <b>${fmt(round2(shop.ovh.reduce((s,o)=>s+(o.amt||0),0)/(shop.wdays||30)))} per working day</b>,
+        absorbed into the Day P&amp;L on Reports. The loan is financing, not an operating cost —
+        it shows as a separate "after loan" line. Set it to 0 when the loan is repaid.</div>
     </div>
     <div class="ticket" style="margin-bottom:8px">
       <b style="font-size:15px">Month-end archive</b>
