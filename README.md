@@ -153,6 +153,10 @@ version in the background, the second one runs it.
   to Google Drive. Restore reloads it onto any device.
 - One live till by design — devices don't sync. **This app is the master record** — the
   Excel workbook is retired, which makes the weekly backup non-negotiable.
+- Testing before launch? Play freely, then Settings → **Clear test data** (PIN + confirm):
+  wipes every record and zeroes stock but keeps your products, prices, overheads and
+  settings — day one starts clean. **Full factory reset** (also PIN-gated) puts
+  absolutely everything back to defaults.
 
 ## Known limits (deliberate, for now)
 
