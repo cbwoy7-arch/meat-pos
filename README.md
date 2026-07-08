@@ -38,6 +38,11 @@ Android app shell.
 - **Stock** — live stock on hand per product (up via Goods In, down with every sale,
   back up on void), total inventory value at cost, and a red **restock now** list of
   every item at or below its alert level. A ⚠ appears on the tab when something is low.
+  The **CUTTING / BREAK DOWN** button at the top opens the batch log: weigh the side,
+  cut, weigh every output — stock moves automatically (source out, cuts in), and each
+  batch records its **yield %, waste kg, and retail uplift**. Below-95% batches flag
+  red; the button itself shows your running average yield. Outputs can never weigh
+  more than the input — the app refuses.
 - **Close** — the evening ritual, ~10 minutes: **blind stock count** (weigh every line
   and enter the scale figure — the app hides what it expects, so the count is a
   measurement, not a confirmation), then **count the money** (till cash excluding any
@@ -129,5 +134,5 @@ version in the background, the second one runs it.
 ## Known limits (deliberate, for now)
 
 - No multi-device sync.
-- Cutting-yield log and the monthly archive export arrive in the next updates.
+- The controls dashboard and monthly archive export arrive in the final update.
 - Not ZIMRA-fiscalised — fine until VAT registration (~Feb–Mar 2027); revisit then.
