@@ -252,6 +252,8 @@ let repFrom = today(), repTo = today();
 let itemsSnap = null, adjIdx = null;
 let closes = load('mc_closes', []);
 let closeStep = 'start', closeDraft = null, viewTs = null;
+let batches = load('mc_batches', []);
+let cutDraft = null;
 let shop = load('mc_shop', { name:'Meat Centre', line2:'', footer:'Thank you, come again!',
                              printer:'off', auto:false, tolKg:0.2, tolTill:0.02 });
 if (shop.tolKg == null) shop.tolKg = 0.2;      // count tolerance per line
@@ -264,7 +266,8 @@ function save(){ localStorage.setItem('mc_products', JSON.stringify(products));
                  localStorage.setItem('mc_sales', JSON.stringify(sales));
                  localStorage.setItem('mc_deliveries', JSON.stringify(deliveries));
                  localStorage.setItem('mc_audit', JSON.stringify(audit));
-                 localStorage.setItem('mc_closes', JSON.stringify(closes)); }
+                 localStorage.setItem('mc_closes', JSON.stringify(closes));
+                 localStorage.setItem('mc_batches', JSON.stringify(batches)); }
 function logAudit(type, detail){
   audit.push({date:today(), time:new Date().toTimeString().slice(0,5), type, detail});
   if (audit.length > 2000) audit = audit.slice(-1500);   // keep the log from growing forever
@@ -545,7 +548,7 @@ function officeView(){
   const sub = `<div class="subnav">
     <button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>
     <button class="${office==='goods'?'on':''}" onclick="office='goods';render()">Goods In</button>
-    <button class="${office==='stock'?'on':''}" onclick="office='stock';render()">Stock${lowStock().length?' ⚠':''}</button>
+    <button class="${office==='stock'||office==='cut'?'on':''}" onclick="office='stock';render()">Stock${lowStock().length?' ⚠':''}</button>
     <button class="${office==='close'?'on':''}" onclick="office='close';render()">Close</button>
     <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
     <button class="${office==='settings'||office==='audit'?'on':''}" onclick="office='settings';render()">Settings</button>
@@ -553,6 +556,7 @@ function officeView(){
   if (office==='reports') return sub + reportsView();
   if (office==='goods') return sub + deliveriesView();
   if (office==='stock') return sub + stockView();
+  if (office==='cut') return sub + cutView();
   if (office==='close') return sub + closeView();
   if (office==='items') return sub + itemsAdmin();
   if (office==='audit') return sub + auditView();
@@ -641,6 +645,114 @@ function csv(){ const days = {};
               days[k].cogs.toFixed(2), (days[k].amt - days[k].cogs).toFixed(2)]; })];
   dl(rows.map(r=>r.join(',')).join('\n'), 'pos-sales-'+repFrom+'-to-'+repTo+'.csv', 'text/csv');
 }
+// ---------------- CUTTING / BREAK DOWN (batch yield log) ----------------
+function cutView(){
+  if (cutDraft) return cutEntry();
+  const cards = [...batches].reverse().slice(0,14).map(b => {
+    const lowYield = b.yield < 0.95;
+    return `<div class="salecard"${lowYield?' style="border-left:4px solid var(--red)"':''}>
+      <div class="top"><span>${b.date} ${b.time} · ${esc(b.source)}</span>
+        <span${lowYield?' style="color:var(--red)"':''}>${Math.round(b.yield*1000)/10}% yield</span></div>
+      <div class="lines">${b.inputKg.toFixed(3)} kg in → ${b.outKg.toFixed(3)} kg out ·
+        waste ${b.waste.toFixed(3)} kg · uplift ${fmt(b.uplift)}<br>
+        ${b.outs.map(o => esc(o.name)+' '+o.kg.toFixed(3)).join(', ')}</div>
+    </div>`; }).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Cutting / break down</b>
+      <div class="note" style="margin-top:6px">Weigh the side or piece before cutting, cut,
+        then weigh every output. Stock moves automatically: the source comes out, the cuts go
+        in. Beef should return roughly <b>95%+</b> of input as saleable product (bones and
+        offal count) — every lost kg is money off the counter.</div>
+      <button class="bigbtn" onclick="cutDraft={src:'',inKg:'',cost:'',outs:[{name:'',kg:''},{name:'',kg:''},{name:'',kg:''}]};render()">START A BATCH</button>
+      <button class="bigbtn grey" onclick="office='stock';render()">‹ Back to Stock</button>
+    </div>
+    ${cards || '<div class="note">No batches recorded yet.</div>'}`;
+}
+function cutEntry(){
+  const opts = sel => products.map(p =>
+    `<option${sel===p.name?' selected':''}>${esc(p.name)}</option>`).join('');
+  const outRows = cutDraft.outs.map((o,i) =>
+    `<div class="itemrow">
+      <select style="flex:2" onchange="cutDraft.outs[${i}].name=this.value;cutSum()">
+        <option value="">— cut produced —</option>${opts(o.name)}</select>
+      <input style="flex:1" type="number" inputmode="decimal" step="any" placeholder="kg"
+             value="${o.kg}" onchange="cutDraft.outs[${i}].kg=this.value;cutSum()">
+    </div>`).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">New batch</b>
+      <div class="itemrow" style="margin-top:8px">
+        <select style="flex:2" onchange="cutSrc(this.value)">
+          <option value="">— source item —</option>${opts(cutDraft.src)}</select>
+      </div>
+      <div class="itemrow lab"><span style="flex:1">input kg (weighed)</span><span style="flex:1">cost $/kg</span></div>
+      <div class="itemrow">
+        <input id="cut-in" style="flex:1" type="number" inputmode="decimal" step="any" placeholder="0.000"
+               value="${cutDraft.inKg}" onchange="cutDraft.inKg=this.value;cutSum()">
+        <input id="cut-cost" style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="0.00"
+               value="${cutDraft.cost}" onchange="cutDraft.cost=this.value;cutSum()">
+      </div>
+      <div class="itemrow lab"><span>outputs — weigh every cut</span></div>
+      ${outRows}
+      <button class="bigbtn grey" onclick="cutDraft.outs.push({name:'',kg:''});render()">+ Add another cut</button>
+      <div id="cut-sum" class="note"></div>
+      <button class="bigbtn" onclick="doCut()">SAVE BATCH</button>
+      <button class="bigbtn grey" onclick="cutDraft=null;render()">Cancel</button>
+    </div>`;
+}
+function cutSrc(name){ cutDraft.src = name;
+  const p = products.find(x => x.name === name);
+  if (p && cutDraft.cost === ''){ cutDraft.cost = p.cost;
+    document.getElementById('cut-cost').value = p.cost; }
+  cutSum();
+}
+function cutCalc(){
+  const inKg = parseFloat(cutDraft.inKg) || 0, cost = parseFloat(cutDraft.cost) || 0;
+  const outs = cutDraft.outs.filter(o => o.name && parseFloat(o.kg) > 0)
+    .map(o => ({name:o.name, kg:round3(parseFloat(o.kg)),
+                price:(products.find(p=>p.name===o.name)||{}).price || 0}));
+  const outKg = round3(outs.reduce((s,o)=>s+o.kg,0));
+  const retail = round2(outs.reduce((s,o)=>s+o.kg*o.price,0));
+  return {inKg, cost, outs, outKg, retail,
+          waste: round3(inKg-outKg), yieldPct: inKg>0 ? outKg/inKg : 0,
+          inputCost: round2(inKg*cost), uplift: round2(retail - inKg*cost)};
+}
+function cutSum(){
+  const c = cutCalc(), el = document.getElementById('cut-sum');
+  if (!el) return;
+  if (!(c.inKg>0) || !c.outs.length){ el.innerHTML = ''; return; }
+  el.innerHTML = 'Out '+c.outKg.toFixed(3)+' of '+c.inKg.toFixed(3)+' kg = <b>'+
+    (Math.round(c.yieldPct*1000)/10)+'% yield</b> · waste '+c.waste.toFixed(3)+' kg · retail value '+
+    fmt(c.retail)+' vs cost '+fmt(c.inputCost)+' = <b>uplift '+fmt(c.uplift)+'</b>'+
+    (c.outKg > c.inKg ? '<br><b style="color:var(--red)">Outputs weigh MORE than the input — recheck.</b>' : '');
+}
+function doCut(){
+  const c = cutCalc();
+  const src = products.find(p => p.name === cutDraft.src);
+  if (!src){ toast('Choose the source item', true); return; }
+  if (!(c.inKg > 0)){ toast('Enter the input weight', true); return; }
+  if (!c.outs.length){ toast('Enter at least one output cut', true); return; }
+  if (c.outKg > c.inKg){ toast('Outputs weigh more than the input — recheck the scales', true); return; }
+  if (c.outs.some(o => o.name === src.name)){
+    // selling leftover under the source's own name is fine — it just stays as source stock
+  }
+  ask('Save this batch? '+c.inKg.toFixed(3)+' kg '+src.name+' → '+c.outKg.toFixed(3)+' kg of cuts ('+
+      (Math.round(c.yieldPct*1000)/10)+'% yield). Stock moves now.', () => {
+    src.stock = round3((src.stock||0) - c.inKg);
+    for (const o of c.outs){ const p = products.find(x => x.name === o.name);
+      if (p) p.stock = round3((p.stock||0) + o.kg); }
+    const b = {ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+               source:src.name, inputKg:c.inKg, costKg:c.cost, inputCost:c.inputCost,
+               outs:c.outs, outKg:c.outKg, yield:round3(c.yieldPct), waste:c.waste,
+               retail:c.retail, uplift:c.uplift};
+    batches.push(b);
+    logAudit('cutting', src.name+' '+c.inKg.toFixed(3)+' kg → '+
+      c.outs.map(o=>o.name+' '+o.kg.toFixed(3)).join(', ')+
+      ' ('+(Math.round(c.yieldPct*1000)/10)+'% yield, waste '+c.waste.toFixed(3)+' kg)');
+    cutDraft = null; save(); render();
+    toast(c.yieldPct < 0.95 ? 'Saved — yield below 95%, review the cutting' : 'Batch saved, stock updated');
+  });
+}
+
 // ---------------- DAILY CLOSE (blind count + till reconciliation) ----------------
 function closeView(){
   if (closeStep === 'count') return closeCount();
@@ -881,6 +993,7 @@ function adjSave(){ const p = products[adjIdx]; if (!p) return;
   adjClose(); save(); render(); toast('Stock adjusted');
 }
 function stockView(){
+  const cutBtn = `<button class="bigbtn grey" style="margin:0 0 8px" onclick="office='cut';render()">🔪 CUTTING / BREAK DOWN${batches.length?' · avg yield '+(Math.round(batches.reduce((s,b)=>s+b.yield,0)/batches.length*1000)/10)+'%':''}</button>`;
   const low = lowStock();
   const val = products.reduce((s,p) => s + Math.max(0, p.stock||0) * (p.cost||0), 0);
   const rows = products.map(p => {
@@ -890,7 +1003,8 @@ function stockView(){
       <td class="n">${(p.stock||0).toFixed(3)} ${esc(p.unit)}</td>
       <td class="n">${p.low > 0 ? p.low : '—'}</td>
       <td class="n">${fmt(Math.max(0, p.stock||0) * (p.cost||0))}</td></tr>`; }).join('');
-  return `<div class="kpis">
+  return `${cutBtn}
+    <div class="kpis">
       <div class="kpi"><b>${fmt(val)}</b><span>Stock on hand (at cost)</span></div>
       <div class="kpi"${low.length?' style="outline:2px solid var(--red)"':''}>
         <b>${low.length}</b><span>Need restocking</span></div>
@@ -1030,7 +1144,7 @@ function changePin(){ pinAsk('Enter NEW 4-digit PIN', p1 =>
     if (p1 === p2) { localStorage.setItem('mc_pin', p1); toast('PIN changed'); }
     else toast('PINs did not match', true);
   })); }
-function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, audit, closes}),
+function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, audit, closes, batches}),
   'meat-pos-backup-'+today()+'.json', 'application/json'); }
 function restore(){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json';
   inp.onchange = () => { const f = inp.files[0]; if (!f) return;
@@ -1042,6 +1156,7 @@ function restore(){ const inp = document.createElement('input'); inp.type = 'fil
           if (Array.isArray(d.deliveries)) deliveries = d.deliveries;
           if (Array.isArray(d.audit)) audit = d.audit;
           if (Array.isArray(d.closes)) closes = d.closes;
+          if (Array.isArray(d.batches)) batches = d.batches;
           logAudit('restore', 'all data replaced from backup file');
           save(); render(); toast('Backup restored'); });
       } catch(e){ toast('Not a valid backup file', true); } }); };
