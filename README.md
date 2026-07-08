@@ -30,6 +30,10 @@ Android app shell.
   sales-by-item in kg, $ and profit; individual sales with **VOID** (voids stay on
   record, struck through — audit trail, never deletion). **Copy** gives a paste-ready
   summary; **CSV** exports per-day per-product figures including cost and profit.
+  Below the sales figures sits the **controls dashboard** for the same date range:
+  till gap across the closes, missing stock at retail, cutting yield and waste,
+  cutting uplift, what's owing to suppliers right now, and the single number that
+  matters — **Leakage** (missing stock + till shortfall), red whenever it isn't zero.
 - **Goods In** — every delivery is received here: supplier, item, **invoiced qty vs
   your own scale's weighed qty**, cost per unit, paid or on account. The weighed qty
   goes into stock automatically and the item's cost price updates; you pay on the
@@ -57,7 +61,18 @@ Android app shell.
   Goods In; corrections go through the stock button, which demands a reason and logs the
   change. Price and cost edits are logged to the audit trail when you press SAVE.
 - **Settings** — change PIN, receipt header/footer + printer setup, **Daily Close
-  tolerances**, **audit log viewer**, backup/restore all data (JSON), lock the office.
+  tolerances**, the **month-end archive**, **audit log viewer**, backup/restore all
+  data (JSON), lock the office.
+
+## Month-end archive (the VAT / tax record base)
+
+Settings → Month-end archive → pick the month → **DOWNLOAD MONTH PACK**: four CSVs
+(sales line-by-line, deliveries, cutting batches, daily closes) plus one JSON of
+everything. Allow multiple downloads when Chrome asks, and save all five files to a
+Google Drive folder per month — that folder is the PBC's books and the VAT working
+base when registration lands (~Feb–Mar 2027). Then **Clear records older than the
+selected month** to keep the phone light: products, current stock and the audit log
+are never touched, and the newest close is always kept.
 
 ## The audit trail
 
@@ -134,5 +149,4 @@ version in the background, the second one runs it.
 ## Known limits (deliberate, for now)
 
 - No multi-device sync.
-- The controls dashboard and monthly archive export arrive in the final update.
 - Not ZIMRA-fiscalised — fine until VAT registration (~Feb–Mar 2027); revisit then.

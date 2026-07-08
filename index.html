@@ -577,6 +577,18 @@ function reportsView(){
   const tot = live.reduce((s,x)=>s+x.total,0);
   const by = how => live.filter(s=>s.pay===how).reduce((s,x)=>s+x.total,0);
   const cogs = Object.values(a).reduce((s,x)=>s+x.cogs,0);
+  // controls figures for the same date range
+  const rc = closes.filter(c => c.date >= repFrom && c.date <= repTo);
+  const tillGap = round2(rc.reduce((s,c) =>
+    s + (c.actual.Cash+c.actual.EcoCash+c.actual.Swipe) - (c.theo.Cash+c.theo.EcoCash+c.theo.Swipe), 0));
+  const missing = round2(rc.reduce((s,c) =>
+    s + c.lines.filter(l=>l.varVal<0).reduce((x,l)=>x+l.varVal,0), 0));
+  const rb = batches.filter(b => b.date >= repFrom && b.date <= repTo);
+  const cutIn = rb.reduce((s,b)=>s+b.inputKg,0);
+  const avgY = cutIn > 0 ? rb.reduce((s,b)=>s+b.outKg,0)/cutIn : null;
+  const waste = round3(rb.reduce((s,b)=>s+b.waste,0));
+  const uplift = round2(rb.reduce((s,b)=>s+b.uplift,0));
+  const owe = round2(deliveries.filter(d=>!d.paid).reduce((s,d)=>s+d.invKg*d.cost,0));
   const names = [...products.map(p=>p.name), ...Object.keys(a).filter(n=>!products.some(p=>p.name===n))];
   const rows = names.filter(n=>a[n]).map(n =>
     `<tr><td>${esc(n)}</td><td class="n">${a[n].kg.toFixed(3)}</td><td class="n">${fmt(a[n].amt)}</td>
@@ -607,6 +619,20 @@ function reportsView(){
       <div class="kpi"><b>${tot ? Math.round((tot-cogs)/tot*100)+'%' : '—'}</b><span>Margin</span></div>
       <div class="kpi"${lowStock().length?' style="outline:2px solid var(--red)"':''}>
         <b>${lowStock().length}</b><span>Need restocking → Stock tab</span></div>
+    </div>
+    <div class="note" style="margin:2px 0 4px"><b>Controls</b> — from the daily closes, cutting log and supplier book:</div>
+    <div class="kpis">
+      <div class="kpi"${tillGap<0?' style="outline:2px solid var(--red)"':''}>
+        <b>${fmt(tillGap)}</b><span>Till gap (${rc.length} close${rc.length===1?'':'s'})</span></div>
+      <div class="kpi"${missing<0?' style="outline:2px solid var(--red)"':''}>
+        <b>${fmt(Math.abs(missing))}</b><span>Missing stock at retail</span></div>
+      <div class="kpi"${avgY!==null&&avgY<0.95?' style="outline:2px solid var(--red)"':''}>
+        <b>${avgY===null?'—':(Math.round(avgY*1000)/10)+'%'}</b><span>Cutting yield (${waste.toFixed(1)} kg waste)</span></div>
+      <div class="kpi"><b>${fmt(uplift)}</b><span>Cutting uplift</span></div>
+      <div class="kpi"${owe>0?' style="outline:2px solid #fb8c00"':''}>
+        <b>${fmt(owe)}</b><span>Owing suppliers (now)</span></div>
+      <div class="kpi"${(Math.abs(missing)+Math.max(0,-tillGap))>0?' style="outline:2px solid var(--red)"':''}>
+        <b>${fmt(round2(Math.abs(missing) + Math.max(0, -tillGap)))}</b><span>Leakage (missing stock + till short)</span></div>
     </div>
     <table><tr><th>Product</th><th class="n">Sold kg</th><th class="n">Takings $</th><th class="n">Profit $</th></tr>
       ${rows || '<tr><td colspan="4" style="color:#999">No sales in this range</td></tr>'}</table>
@@ -1127,6 +1153,19 @@ function settingsView(){
       <div class="note">Variances beyond these flag red at the Daily Close. Current: ${shop.tolKg} kg
         per line, ±${round2(shop.tolTill*100)}% on the till.</div>
     </div>
+    <div class="ticket" style="margin-bottom:8px">
+      <b style="font-size:15px">Month-end archive</b>
+      <div class="itemrow" style="margin-top:8px;margin-bottom:0">
+        <input id="arc-m" type="month" style="flex:1" value="${today().slice(0,7)}">
+      </div>
+      <button class="bigbtn" onclick="archiveMonth()">DOWNLOAD MONTH PACK</button>
+      <button class="bigbtn grey" onclick="pruneOld()">Clear records older than selected month</button>
+      <div class="note">Month-end routine: download the pack (4 CSVs + 1 JSON — allow multiple
+        downloads when Chrome asks) and save all five files to Google Drive. That folder is the
+        VAT / tax record base for the PBC. Then clear old months to keep the phone light —
+        products, current stock and the audit log are never cleared, and the newest close is
+        always kept.</div>
+    </div>
     <div class="setrow"><span>Audit log</span>
       <button onclick="office='audit';render()">View</button></div>
     <div class="setrow"><span>Backup all data</span>
@@ -1146,6 +1185,65 @@ function changePin(){ pinAsk('Enter NEW 4-digit PIN', p1 =>
   })); }
 function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, audit, closes, batches}),
   'meat-pos-backup-'+today()+'.json', 'application/json'); }
+// ---------------- month-end archive & prune ----------------
+function archiveMonth(){
+  const m = (document.getElementById('arc-m')||{}).value || today().slice(0,7);
+  const inM = x => x.date && x.date.startsWith(m);
+  const S = sales.filter(inM), D = deliveries.filter(inM),
+        B = batches.filter(inM), C = closes.filter(inM);
+  if (!S.length && !D.length && !B.length && !C.length){
+    toast('Nothing recorded in '+m, true); return; }
+  const q = v => /[",\n]/.test(String(v)) ? '"'+String(v).replace(/"/g,'""')+'"' : String(v);
+  const csvOf = rows => rows.map(r => r.map(q).join(',')).join('\n');
+  const files = [
+    ['sales-'+m+'.csv', csvOf([
+      ['Date','Time','Sale','Pay','Void','Product','Qty','Price','Amount','Cost of sold'],
+      ...S.flatMap(s => s.lines.map(l => [s.date, s.time, String(s.id).slice(-6), s.pay,
+        s.void?'VOID':'', l.name, l.kg.toFixed(3), l.price.toFixed(2), l.amt.toFixed(2),
+        round2(l.kg*(l.cost||0)).toFixed(2)]))])],
+    ['deliveries-'+m+'.csv', csvOf([
+      ['Date','Time','Supplier','Item','Invoiced','Weighed','Cost/unit','Total (invoiced x cost)','Paid','Note'],
+      ...D.map(d => [d.date, d.time, d.supplier, d.item, d.invKg.toFixed(3), d.wKg.toFixed(3),
+        d.cost.toFixed(2), round2(d.invKg*d.cost).toFixed(2), d.paid?'Y':'N', d.note||''])])],
+    ['cutting-'+m+'.csv', csvOf([
+      ['Date','Time','Source','Input kg','Cost/kg','Input cost','Output kg','Yield %','Waste kg','Retail value','Uplift','Outputs'],
+      ...B.map(b => [b.date, b.time, b.source, b.inputKg.toFixed(3), (b.costKg||0).toFixed(2),
+        b.inputCost.toFixed(2), b.outKg.toFixed(3), (Math.round(b.yield*1000)/10), b.waste.toFixed(3),
+        b.retail.toFixed(2), b.uplift.toFixed(2), b.outs.map(o=>o.name+' '+o.kg.toFixed(3)).join('; ')])])],
+    ['closes-'+m+'.csv', csvOf([
+      ['Date','Time','Takings Cash','Takings EcoCash','Takings Swipe','Counted Cash','Counted EcoCash','Counted Swipe','Till gap','Missing stock $','Lines counted','Lines flagged','Note'],
+      ...C.map(c => { const theoT = c.theo.Cash+c.theo.EcoCash+c.theo.Swipe,
+                            actT = c.actual.Cash+c.actual.EcoCash+c.actual.Swipe;
+        return [c.date, c.time, c.theo.Cash.toFixed(2), c.theo.EcoCash.toFixed(2), c.theo.Swipe.toFixed(2),
+          c.actual.Cash.toFixed(2), c.actual.EcoCash.toFixed(2), c.actual.Swipe.toFixed(2),
+          round2(actT-theoT).toFixed(2),
+          Math.abs(round2(c.lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0))).toFixed(2),
+          c.lines.length, c.lines.filter(l=>Math.abs(l.varKg)>(c.tolKg??0.2)).length, c.note||''];})])],
+    ['archive-'+m+'.json', JSON.stringify({month:m, exported:today(), products,
+      sales:S, deliveries:D, batches:B, closes:C})]
+  ];
+  files.forEach(([name, data], i) => setTimeout(() =>
+    dl(data, name, name.endsWith('.json')?'application/json':'text/csv'), i*400));
+  logAudit('archive', m+' pack exported ('+S.length+' sales, '+D.length+' deliveries, '+
+    B.length+' batches, '+C.length+' closes)');
+  save(); toast('Month pack downloading — save all 5 files to Drive');
+}
+function pruneOld(){
+  const m = (document.getElementById('arc-m')||{}).value || today().slice(0,7);
+  const cut = m + '-01';
+  const lastClose = closes[closes.length-1];
+  const n = [sales, deliveries, batches, closes]
+    .reduce((s,arr) => s + arr.filter(x => x.date < cut).length, 0);
+  if (!n){ toast('Nothing older than '+m+' to clear', true); return; }
+  ask('Delete '+n+' records dated before '+cut+'? Only do this AFTER downloading their month packs to Drive. Products, stock and the audit log are kept.', () => {
+    sales = sales.filter(x => x.date >= cut);
+    deliveries = deliveries.filter(x => x.date >= cut);
+    batches = batches.filter(x => x.date >= cut);
+    closes = closes.filter(x => x.date >= cut || x === lastClose);  // keep the newest close: it anchors the next till window
+    logAudit('prune', n+' records before '+cut+' cleared after archiving');
+    save(); render(); toast(n+' old records cleared');
+  });
+}
 function restore(){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json';
   inp.onchange = () => { const f = inp.files[0]; if (!f) return;
     f.text().then(t => { try { const d = JSON.parse(t);
