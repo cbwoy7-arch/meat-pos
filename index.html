@@ -184,6 +184,10 @@
 <div class="overlay" id="adjmodal" style="align-items:center">
   <div class="card" style="border-radius:16px;margin:0 20px">
     <h2 id="adj-title">Adjust stock</h2>
+    <div class="modetog" style="margin:8px 0">
+      <button id="adj-frz" onclick="adjSetLoc('freezer')">Freezer</button>
+      <button id="adj-chl" class="on" onclick="adjSetLoc('chiller')">Chiller</button>
+    </div>
     <div class="note" id="adj-cur" style="margin:4px 0 10px"></div>
     <input id="adj-qty" type="number" inputmode="decimal" step="any"
            style="width:100%;font-size:24px;padding:10px;border:2px solid var(--green);border-radius:10px;text-align:center"
@@ -234,14 +238,16 @@ const DEFAULTS = [ // name, unit, selling $/unit (workbook cost x 1.38), categor
   ["Pork Meat","kg",6.00,"Pork"],["Trotters","kg",5.52,"Pork"],["Pork Head","kg",5.52,"Pork"],
   ["Polony","kg",6.00,"Processed"],["Russian Sausages","kg",4.97,"Processed"],
   ["Sausages","kg",5.52,"Processed"]
-].map(([name,unit,price,cat]) => ({name,unit,price,cat,cost:round2(price/1.38),stock:0,low:0}));
+].map(([name,unit,price,cat]) => ({name,unit,price,cat,cost:round2(price/1.38),freezer:0,chiller:0,low:0}));
 
 let products = load('mc_products', DEFAULTS);
 for (const p of products){                               // migrate older data
   if (!p.cat) p.cat = 'Other';
   if (p.cost == null) p.cost = round2(p.price/1.38);     // workbook rule: sell = cost x 1.38
-  if (p.stock == null) p.stock = 0;
-  if (p.low == null) p.low = 0;                          // 0 = no restock alert
+  if (p.chiller == null) p.chiller = p.stock || 0;       // old single pool becomes chiller (sales floor)
+  if (p.freezer == null) p.freezer = 0;                  // freezer (main store) — load it via a stock-take
+  delete p.stock;
+  if (p.low == null) p.low = 0;                          // 0 = no restock alert (measured on total on-hand)
 }
 let sales = load('mc_sales', []);
 let deliveries = load('mc_deliveries', []);
@@ -249,12 +255,13 @@ let audit = load('mc_audit', []);
 let ticket = [], tab = 'sell', view = 'cats', selCat = null;
 let office = 'reports', pinOK = false, cur = null, mode = 'kg';
 let repFrom = today(), repTo = today();
-let itemsSnap = null, adjIdx = null;
+let itemsSnap = null, adjIdx = null, adjLoc = 'chiller';
 let closes = load('mc_closes', []);
 let closeStep = 'start', closeDraft = null, viewTs = null;
 let batches = load('mc_batches', []);
 let adjustments = load('mc_adjust', []);   // valued stock write-offs / corrections (spoilage etc.)
 let cutDraft = null;
+let issueDraft = null, ftakeDraft = null, ftakeLast = null;   // freezer→chiller issue + weekly freezer stock-take
 let shop = load('mc_shop', { name:'Meat Centre', line2:'', footer:'Thank you, come again!',
                              printer:'off', auto:false, tolKg:0.2, tolTill:0.02 });
 if (shop.tolKg == null) shop.tolKg = 0.2;      // count tolerance per line
@@ -285,6 +292,7 @@ function fmt(n){ return '$'+n.toFixed(2); }
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
 function round2(n){ return Math.round(n*100)/100; }
 function round3(n){ return Math.round(n*1000)/1000; }
+function onHand(p){ return round3((p.freezer||0) + (p.chiller||0)); }   // total across freezer + chiller
 function cats(){ const seen = []; for (const p of products) if (!seen.includes(p.cat)) seen.push(p.cat); return seen; }
 function catColor(c){ return CAT_COLORS[c] || PALETTE[cats().indexOf(c) % PALETTE.length]; }
 function toast(msg, bad){ const t = document.getElementById('toast'); t.textContent = msg;
@@ -382,7 +390,7 @@ function pay(how){ if (!ticket.length) return;
                lines:ticket, pay:how, total, void:false};
   sales.push(rec); lastSaleId = rec.id;
   for (const l of rec.lines){ const p = products.find(x => x.name === l.name);
-    if (p) p.stock = round3((p.stock||0) - l.kg); }
+    if (p) p.chiller = round3((p.chiller||0) - l.kg); }   // sales come out of the chiller
   ticket = []; view = 'cats'; save(); render(); showDone(total, how);
   if (shop.auto && shop.printer !== 'off') printSale(rec.id);
 }
@@ -556,7 +564,7 @@ function officeView(){
   const sub = `<div class="subnav">
     <button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>
     <button class="${office==='goods'?'on':''}" onclick="office='goods';render()">Goods In</button>
-    <button class="${office==='stock'||office==='cut'?'on':''}" onclick="office='stock';render()">Stock${lowStock().length?' ⚠':''}</button>
+    <button class="${['stock','cut','issue','ftake'].includes(office)?'on':''}" onclick="office='stock';ftakeLast=null;render()">Stock${lowStock().length?' ⚠':''}</button>
     <button class="${office==='close'?'on':''}" onclick="office='close';render()">Close</button>
     <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
     <button class="${office==='settings'||office==='audit'?'on':''}" onclick="office='settings';render()">Settings</button>
@@ -565,6 +573,8 @@ function officeView(){
   if (office==='goods') return sub + deliveriesView();
   if (office==='stock') return sub + stockView();
   if (office==='cut') return sub + cutView();
+  if (office==='issue') return sub + issueView();
+  if (office==='ftake') return sub + ftakeView();
   if (office==='close') return sub + closeView();
   if (office==='items') return sub + itemsAdmin();
   if (office==='audit') return sub + auditView();
@@ -573,7 +583,7 @@ function officeView(){
 function rangeSales(){ return sales.filter(s => s.date >= repFrom && s.date <= repTo); }
 function costOf(name){ const p = products.find(x => x.name === name); return p ? p.cost||0 : 0; }
 function lineCost(l){ return l.kg * (l.cost != null ? l.cost : costOf(l.name)); }
-function lowStock(){ return products.filter(p => p.low > 0 && p.stock <= p.low); }
+function lowStock(){ return products.filter(p => p.low > 0 && onHand(p) <= p.low); }
 // cash legitimately paid out of the till at a close, and the till gap that accounts for it
 function payoutOf(c){ return round2((c.payouts||[]).reduce((s,x)=>s+(parseFloat(x.amt)||0),0)); }
 function tillGapOf(c){ return round2((c.actual.Cash+c.actual.EcoCash+c.actual.Swipe)
@@ -697,7 +707,7 @@ function reportsView(){
 function voidSale(id){ ask('Void this sale? It stays on record but is removed from totals.', () => {
   const s = sales.find(x=>x.id===id); if (s) { s.void = true;
     for (const l of s.lines){ const p = products.find(x => x.name === l.name);
-      if (p) p.stock = round3((p.stock||0) + l.kg); }        // goods go back on the shelf
+      if (p) p.chiller = round3((p.chiller||0) + l.kg); }    // voided goods go back in the chiller
     logAudit('void', s.date+' '+s.time+' '+s.pay+' sale '+fmt(s.total)+' — '+
       s.lines.map(l=>l.name+' '+l.kg.toFixed(3)).join(', '));
     save(); render(); } }); }
@@ -738,8 +748,8 @@ function cutView(){
   return `<div class="icard">
       <b style="font-size:15px">Cutting / break down</b>
       <div class="note" style="margin-top:6px">Weigh the side or piece before cutting, cut,
-        then weigh every output. Stock moves automatically: the source comes out, the cuts go
-        in. Beef should return roughly <b>95%+</b> of input as saleable product (bones and
+        then weigh every output. Stock moves automatically: the source comes out of the freezer,
+        the cuts go into the chiller. Beef should return roughly <b>95%+</b> of input as saleable product (bones and
         offal count) — every lost kg is money off the counter.</div>
       <button class="bigbtn" onclick="cutDraft={src:'',inKg:'',cost:'',outs:[{name:'',kg:''},{name:'',kg:''},{name:'',kg:''}]};render()">START A BATCH</button>
       <button class="bigbtn grey" onclick="office='stock';render()">‹ Back to Stock</button>
@@ -815,9 +825,9 @@ function doCut(){
   }
   ask('Save this batch? '+c.inKg.toFixed(3)+' kg '+src.name+' → '+c.outKg.toFixed(3)+' kg of cuts ('+
       (Math.round(c.yieldPct*1000)/10)+'% yield). Stock moves now.', () => {
-    src.stock = round3((src.stock||0) - c.inKg);
+    src.freezer = round3((src.freezer||0) - c.inKg);              // carcass/bulk comes out of the freezer
     for (const o of c.outs){ const p = products.find(x => x.name === o.name);
-      if (p) p.stock = round3((p.stock||0) + o.kg); }
+      if (p) p.chiller = round3((p.chiller||0) + o.kg); }         // cuts go into the chiller for sale
     const b = {ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
                source:src.name, inputKg:c.inKg, costKg:c.cost, inputCost:c.inputCost,
                outs:c.outs, outKg:c.outKg, yield:round3(c.yieldPct), waste:c.waste,
@@ -865,10 +875,11 @@ function closeCount(){
              onchange="closeDraft.counts['${esc(p.name)}']=this.value">
     </div>`).join('');
   return `<div class="icard">
-      <b style="font-size:15px">Step 1 of 2 — blind stock count</b>
-      <div class="note" style="margin:6px 0 10px">Weigh each line and enter exactly what the
-        scale says. Leave blank anything you did not count. No expected figures are shown —
-        do not peek at the Stock tab.</div>
+      <b style="font-size:15px">Step 1 of 2 — blind chiller count</b>
+      <div class="note" style="margin:6px 0 10px">Count the <b>chiller</b> (the sales counter/display) —
+        weigh each line and enter exactly what the scale says. Leave blank anything you did not count.
+        No expected figures are shown — do not peek at the Stock tab. The freezer is counted weekly,
+        separately.</div>
       ${rows}
       <button class="bigbtn" onclick="closeNext()">NEXT — COUNT THE TILL ›</button>
       <button class="bigbtn grey" onclick="closeStep='start';render()">Cancel</button>
@@ -925,11 +936,11 @@ function doClose(){
     if (raw === undefined || raw === '') continue;
     const counted = parseFloat(raw);
     if (isNaN(counted)) continue;
-    const expected = round3(p.stock||0);
+    const expected = round3(p.chiller||0);
     const varKg = round3(counted - expected);
     lines.push({name:p.name, unit:p.unit, price:p.price, expected, counted:round3(counted),
                 varKg, varVal:round2(varKg * p.price)});
-    p.stock = round3(counted);                       // physical truth wins
+    p.chiller = round3(counted);                     // physical truth wins (chiller only)
   }
   const actual = {Cash:round2(parseFloat(closeDraft.cash)||0),
                   EcoCash:round2(parseFloat(closeDraft.eco)||0),
@@ -1032,7 +1043,7 @@ function deliveriesView(){
       <div class="lines">${Object.entries(owing).map(([s,v])=>esc(s)+' — '+fmt(v)).join('<br>')}</div>
     </div>` : ''}
     ${cards}
-    <div class="note">Weighed qty goes into stock; you PAY on invoiced qty — any shortage is claimed
+    <div class="note">Weighed qty goes into the <b>freezer</b>; you PAY on invoiced qty — any shortage is claimed
       from the supplier, and it shows red above so it isn't forgotten. The item's cost price updates
       from the delivery automatically. Showing the last 30 deliveries.</div>`;
 }
@@ -1049,7 +1060,7 @@ function addDelivery(){
              invKg:round3(invKg), wKg:round3(wKg), cost:round2(cost),
              paid:g('d-paid').checked, note:g('d-note').value.trim()};
   deliveries.push(d);
-  p.stock = round3((p.stock||0) + d.wKg);
+  p.freezer = round3((p.freezer||0) + d.wKg);   // deliveries land in the freezer (main store)
   if (round2(cost) !== p.cost){
     logAudit('cost-change', p.name+': cost '+fmt(p.cost||0)+' → '+fmt(round2(cost))+' (delivery, '+d.supplier+')');
     p.cost = round2(cost);
@@ -1075,51 +1086,161 @@ function auditView(){
       from inside the app. Showing the last 100 entries.</div>
     ${cards || '<div class="note">Nothing logged yet.</div>'}`;
 }
-function adjOpen(i){ adjIdx = i; const p = products[i];
-  document.getElementById('adj-title').textContent = 'Adjust stock — '+p.name;
-  document.getElementById('adj-cur').textContent = 'App expects '+(p.stock||0).toFixed(3)+' '+p.unit+'. Enter the true figure and why it differs.';
+function adjOpen(i){ adjIdx = i;
+  document.getElementById('adj-title').textContent = 'Correct stock — '+products[i].name;
   document.getElementById('adj-qty').value = ''; document.getElementById('adj-why').value = '';
+  adjSetLoc('chiller');
   document.getElementById('adjmodal').classList.add('open'); }
+function adjSetLoc(loc){ adjLoc = loc; const p = products[adjIdx]; if (!p) return;
+  document.getElementById('adj-frz').classList.toggle('on', loc==='freezer');
+  document.getElementById('adj-chl').classList.toggle('on', loc==='chiller');
+  document.getElementById('adj-cur').textContent =
+    (loc==='freezer'?'Freezer':'Chiller')+' now shows '+(p[loc]||0).toFixed(3)+' '+p.unit+
+    '. Enter the true figure and why it differs.'; }
 function adjClose(){ document.getElementById('adjmodal').classList.remove('open'); }
 function adjSave(){ const p = products[adjIdx]; if (!p) return;
   const v = parseFloat(document.getElementById('adj-qty').value);
   const why = document.getElementById('adj-why').value.trim();
   if (isNaN(v)){ toast('Enter the true quantity', true); return; }
   if (!why){ toast('A reason is required', true); return; }
-  const from = round3(p.stock||0), to = round3(v), delta = round3(to - from);
+  const from = round3(p[adjLoc]||0), to = round3(v), delta = round3(to - from);
   adjustments.push({ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
-    name:p.name, unit:p.unit, from, to, delta, cost:p.cost||0, reason:why}); // delta<0 = write-off at cost
-  logAudit('stock-adjust', p.name+': '+from.toFixed(3)+' → '+to.toFixed(3)+' '+p.unit+' — '+why);
-  p.stock = to;
-  adjClose(); save(); render(); toast('Stock adjusted');
+    name:p.name, unit:p.unit, loc:adjLoc, from, to, delta, cost:p.cost||0, reason:why}); // delta<0 = write-off at cost
+  logAudit('stock-adjust', p.name+' ('+adjLoc+'): '+from.toFixed(3)+' → '+to.toFixed(3)+' '+p.unit+' — '+why);
+  p[adjLoc] = to;
+  adjClose(); save(); render(); toast('Stock corrected');
 }
 function stockView(){
-  const cutBtn = `<button class="bigbtn grey" style="margin:0 0 8px" onclick="office='cut';render()">🔪 CUTTING / BREAK DOWN${batches.length?' · avg yield '+(Math.round(batches.reduce((s,b)=>s+b.yield,0)/batches.length*1000)/10)+'%':''}</button>`;
+  const avgY = batches.length ? ' · avg yield '+(Math.round(batches.reduce((s,b)=>s+b.yield,0)/batches.length*1000)/10)+'%' : '';
+  const btns = `<button class="bigbtn grey" style="margin:0 0 6px" onclick="office='issue';render()">📦 → ❄ ISSUE TO CHILLER</button>
+    <button class="bigbtn grey" style="margin:0 0 6px" onclick="office='cut';render()">🔪 CUTTING / BREAK DOWN${avgY}</button>
+    <button class="bigbtn grey" style="margin:0 0 8px" onclick="office='ftake';render()">❄ FREEZER STOCK-TAKE (weekly)</button>`;
   const low = lowStock();
-  const val = products.reduce((s,p) => s + Math.max(0, p.stock||0) * (p.cost||0), 0);
+  const val = products.reduce((s,p) => s + Math.max(0, onHand(p)) * (p.cost||0), 0);
+  const frzVal = products.reduce((s,p) => s + Math.max(0, p.freezer||0) * (p.cost||0), 0);
   const rows = products.map(p => {
-    const isLow = p.low > 0 && p.stock <= p.low;
+    const isLow = p.low > 0 && onHand(p) <= p.low;
     return `<tr${isLow?' style="color:var(--red);font-weight:bold"':''}>
       <td>${esc(p.name)}${isLow?' ⚠':''}</td>
-      <td class="n">${(p.stock||0).toFixed(3)} ${esc(p.unit)}</td>
-      <td class="n">${p.low > 0 ? p.low : '—'}</td>
-      <td class="n">${fmt(Math.max(0, p.stock||0) * (p.cost||0))}</td></tr>`; }).join('');
-  return `${cutBtn}
+      <td class="n">${(p.freezer||0).toFixed(2)}</td>
+      <td class="n">${(p.chiller||0).toFixed(2)}</td>
+      <td class="n">${fmt(Math.max(0, onHand(p)) * (p.cost||0))}</td></tr>`; }).join('');
+  return `${btns}
     <div class="kpis">
       <div class="kpi"><b>${fmt(val)}</b><span>Stock on hand (at cost)</span></div>
+      <div class="kpi"><b>${fmt(frzVal)}</b><span>of which freezer</span></div>
       <div class="kpi"${low.length?' style="outline:2px solid var(--red)"':''}>
         <b>${low.length}</b><span>Need restocking</span></div>
     </div>
     ${low.length ? `<div class="salecard" style="border-left:4px solid var(--red)">
-      <b style="color:var(--red)">Restock now:</b>
-      <div class="lines">${low.map(p => esc(p.name)+' — '+(p.stock||0).toFixed(3)+' '+esc(p.unit)+' left').join('<br>')}</div>
+      <b style="color:var(--red)">Restock now (order from supplier):</b>
+      <div class="lines">${low.map(p => esc(p.name)+' — '+onHand(p).toFixed(3)+' '+esc(p.unit)+' total left').join('<br>')}</div>
     </div>` : ''}
-    <table><tr><th>Product</th><th class="n">On hand</th><th class="n">Alert @</th><th class="n">Value $</th></tr>${rows}</table>
-    <div class="note">Stock rises through <b>Goods In</b> deliveries, falls with every sale,
-      goes back up if a sale is voided, and is corrected only through <b>Items → stock</b>
-      (reason required, every change logged). Set <b>low @</b> above 0 on an item to get the
-      red restock alert here and on the Reports screen. Reports → <b>Restock value</b> tells
-      you what the goods sold in a date range cost to replace.</div>`;
+    <table><tr><th>Product</th><th class="n">Freezer</th><th class="n">Chiller</th><th class="n">Value $</th></tr>${rows}</table>
+    <div class="note"><b>Freezer</b> = main store; deliveries land here. <b>Issue to chiller</b> moves
+      stock to the sales counter, where the cashier is accountable for it. Sales, voids and the daily
+      <b>Close</b> touch the <b>chiller</b> only; cutting takes bulk out of the freezer and puts the
+      cuts into the chiller. Count the freezer weekly with <b>Freezer stock-take</b>. Corrections go
+      through the stock button on <b>Items</b> — pick freezer or chiller, reason required, every
+      change logged. The restock alert fires on total on-hand (freezer + chiller).</div>`;
+}
+function issueView(){
+  if (!issueDraft) issueDraft = {};
+  const rows = products.map(p =>
+    `<div class="itemrow">
+      <span style="flex:2;font-size:14px">${esc(p.name)}
+        <small style="color:#90a4ae">frz ${(p.freezer||0).toFixed(2)} · chl ${(p.chiller||0).toFixed(2)}</small></span>
+      <input style="flex:1" type="number" inputmode="decimal" step="any" placeholder="kg →"
+             value="${issueDraft[p.name] ?? ''}"
+             onchange="issueDraft['${esc(p.name)}']=this.value">
+    </div>`).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Issue stock to the chiller</b>
+      <div class="note" style="margin:6px 0 10px">Move stock from the freezer (main store) to the
+        chiller for selling. Enter the kg to move for each line — it comes out of the freezer and into
+        the chiller, and from now the cashier is accountable for it at the daily Close.</div>
+      ${rows}
+      <button class="bigbtn" onclick="doIssue()">ISSUE TO CHILLER</button>
+      <button class="bigbtn grey" onclick="issueDraft=null;office='stock';render()">‹ Back to Stock</button>
+    </div>`;
+}
+function doIssue(){
+  const moves = [];
+  for (const p of products){
+    const raw = issueDraft[p.name];
+    if (raw === undefined || raw === '') continue;
+    const kg = parseFloat(raw);
+    if (isNaN(kg) || kg === 0) continue;
+    if (kg < 0){ toast('Issue amounts must be positive', true); return; }
+    moves.push({p, kg:round3(kg)});
+  }
+  if (!moves.length){ toast('Enter at least one amount to issue', true); return; }
+  ask('Issue '+moves.length+' line'+(moves.length>1?'s':'')+' from the freezer to the chiller?', () => {
+    for (const {p, kg} of moves){
+      p.freezer = round3((p.freezer||0) - kg);
+      p.chiller = round3((p.chiller||0) + kg);
+      logAudit('issue', p.name+' '+kg.toFixed(3)+' '+p.unit+' freezer → chiller');
+    }
+    issueDraft = null; save(); render(); toast('Issued to chiller');
+  });
+}
+function ftakeView(){
+  if (ftakeLast) return ftakeResult();
+  if (!ftakeDraft) ftakeDraft = {};
+  const rows = products.map(p =>
+    `<div class="itemrow">
+      <span style="flex:2;font-size:14px">${esc(p.name)} <small style="color:#90a4ae">${esc(p.unit)}</small></span>
+      <input style="flex:1" type="number" inputmode="decimal" step="any" placeholder="—"
+             value="${ftakeDraft[p.name] ?? ''}"
+             onchange="ftakeDraft['${esc(p.name)}']=this.value">
+    </div>`).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Freezer stock-take (weekly)</b>
+      <div class="note" style="margin:6px 0 10px">Weigh what is in the <b>freezer</b> and enter the
+        scale figure for each line. Expected figures are hidden — count blind. On save the freezer
+        resets to your counts, and any shortfall is logged as a write-off at cost (it shows in Reports).</div>
+      ${rows}
+      <button class="bigbtn" onclick="doFtake()">SAVE &amp; REVEAL</button>
+      <button class="bigbtn grey" onclick="ftakeDraft=null;office='stock';render()">Cancel</button>
+    </div>`;
+}
+function doFtake(){
+  const lines = [];
+  for (const p of products){
+    const raw = ftakeDraft[p.name];
+    if (raw === undefined || raw === '') continue;
+    const counted = parseFloat(raw);
+    if (isNaN(counted)) continue;
+    const expected = round3(p.freezer||0), c = round3(counted), varKg = round3(c - expected);
+    lines.push({name:p.name, expected, counted:c, varKg, varVal:round2(varKg * (p.cost||0))});
+    if (varKg !== 0)
+      adjustments.push({ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+        name:p.name, unit:p.unit, loc:'freezer', from:expected, to:c, delta:varKg,
+        cost:p.cost||0, reason:'freezer stock-take'});
+    p.freezer = c;
+  }
+  if (!lines.length){ toast('Count at least one line first', true); return; }
+  const net = round2(lines.reduce((s,l)=>s+l.varVal,0));
+  logAudit('freezer-stocktake', lines.length+' lines counted, net '+fmt(net)+' at cost (freezer reset to counts)');
+  ftakeLast = {date:today(), time:new Date().toTimeString().slice(0,5), lines, net};
+  ftakeDraft = null; save(); render();
+}
+function ftakeResult(){
+  const f = ftakeLast;
+  const rows = [...f.lines].sort((a,b)=>Math.abs(b.varVal)-Math.abs(a.varVal)).map(l =>
+    `<tr${l.varKg<0?' style="color:var(--red);font-weight:bold"':''}>
+      <td>${esc(l.name)}</td><td class="n">${l.expected.toFixed(3)}</td>
+      <td class="n">${l.counted.toFixed(3)}</td><td class="n">${l.varKg>0?'+':''}${l.varKg.toFixed(3)}</td>
+      <td class="n">${fmt(l.varVal)}</td></tr>`).join('');
+  return `<div class="kpis">
+      <div class="kpi"${f.net<0?' style="outline:2px solid var(--red)"':''}>
+        <b>${fmt(f.net)}</b><span>Net freezer variance (at cost)</span></div>
+      <div class="kpi"><b>${f.lines.length}</b><span>Lines counted</span></div>
+    </div>
+    <table><tr><th>Product</th><th class="n">Expected</th><th class="n">Counted</th><th class="n">Var</th><th class="n">Var $</th></tr>${rows}</table>
+    <div class="note">Freezer reset to your counts. Shortfalls are logged as write-offs at cost and
+      appear in Reports. Counted ${f.date} ${f.time}.</div>
+    <button class="bigbtn" onclick="ftakeLast=null;office='stock';render()">DONE</button>`;
 }
 function itemsAdmin(){
   if (!itemsSnap) itemsSnap = products.map(p => ({name:p.name, price:p.price, cost:p.cost}));
@@ -1143,19 +1264,19 @@ function itemsAdmin(){
                onchange="products[${i}].cost=parseFloat(this.value)||0">
         <button class="st" style="background:#fafafa;border:1px solid #cfd8dc;border-radius:8px;
                 padding:9px 2px;font-size:13px;color:var(--text)"
-                onclick="adjOpen(${i})">${(p.stock||0).toFixed(2)}</button>
+                onclick="adjOpen(${i})">${onHand(p).toFixed(2)}</button>
         <input class="lo" type="number" step="any" value="${p.low}"
                onchange="products[${i}].low=parseFloat(this.value)||0">
       </div>
     </div>`).join('');
   return `<datalist id="catlist">${opts}</datalist>${rows}
-    <button class="bigbtn grey" onclick="products.push({name:'New item',unit:'kg',price:0,cost:0,cat:'Other',stock:0,low:0});render()">+ Add product line</button>
+    <button class="bigbtn grey" onclick="products.push({name:'New item',unit:'kg',price:0,cost:0,cat:'Other',freezer:0,chiller:0,low:0});render()">+ Add product line</button>
     <button class="bigbtn" onclick="saveItems()">SAVE</button>
     <div class="note">Type a new category name in the category box to create it — it becomes a
       tile on the sell screen automatically. <b>sell $</b> = selling price (cost × 1.38 rule);
-      <b>cost $</b> = buy price per unit — drives profit and restock figures. <b>stock</b> is
-      read-only here: deliveries add to it through <b>Goods In</b>, and corrections go through
-      the stock button (tap the figure — a reason is required and every change is logged).
+      <b>cost $</b> = buy price per unit — drives profit and restock figures. <b>stock</b> (total
+      freezer + chiller) is read-only here: deliveries add to the freezer through <b>Goods In</b>, corrections go through
+      the stock button (tap the figure, pick freezer or chiller — a reason is required and logged).
       <b>low @</b> = restock alert level (0 = no alert). Price and cost changes are logged to
       the audit trail when you press SAVE.</div>`;
 }
@@ -1169,7 +1290,7 @@ function saveItems(){
   itemsSnap = null; save(); toast('Saved'); render();
 }
 function delItem(i){ ask('Delete "'+products[i].name+'"? Past sales of it stay in reports.', () => {
-  logAudit('item-deleted', products[i].name+' (stock at deletion: '+(products[i].stock||0).toFixed(3)+')');
+  logAudit('item-deleted', products[i].name+' (stock at deletion: '+onHand(products[i]).toFixed(3)+')');
   products.splice(i,1); save(); render(); }); }
 function settingsView(){
   const prn = shop.printer;
@@ -1321,8 +1442,8 @@ function archiveMonth(){
           Math.abs(round2(c.lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0))).toFixed(2),
           c.lines.length, c.lines.filter(l=>Math.abs(l.varKg)>(c.tolKg??0.2)).length, c.note||''])])],
     ['adjustments-'+m+'.csv', csvOf([
-      ['Date','Time','Product','From kg','To kg','Change kg','Cost/unit','Value at cost','Reason'],
-      ...A.map(a => [a.date, a.time, a.name, a.from.toFixed(3), a.to.toFixed(3), a.delta.toFixed(3),
+      ['Date','Time','Product','Location','From kg','To kg','Change kg','Cost/unit','Value at cost','Reason'],
+      ...A.map(a => [a.date, a.time, a.name, a.loc||'', a.from.toFixed(3), a.to.toFixed(3), a.delta.toFixed(3),
         (a.cost||0).toFixed(2), round2(a.delta*(a.cost||0)).toFixed(2), a.reason||''])])],
     ['archive-'+m+'.json', JSON.stringify({month:m, exported:today(), products,
       sales:S, deliveries:D, batches:B, closes:C, adjustments:A})]
@@ -1376,8 +1497,9 @@ function clearData(full){
       () => {
         if (full){ localStorage.clear(); location.reload(); return; }
         sales = []; deliveries = []; batches = []; closes = []; adjustments = []; audit = [];
-        for (const p of products) p.stock = 0;
+        for (const p of products){ p.freezer = 0; p.chiller = 0; }
         ticket = []; closeDraft = null; cutDraft = null; closeStep = 'start'; viewTs = null;
+        issueDraft = null; ftakeDraft = null; ftakeLast = null;
         logAudit('reset', 'test data cleared — all records wiped, stock zeroed, products & settings kept');
         save(); render(); toast('Cleared — ready for real trading');
       });

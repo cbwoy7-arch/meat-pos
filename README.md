@@ -44,26 +44,34 @@ Android app shell.
   matters — **Leakage** (missing stock + till shortfall), red whenever it isn't zero.
 - **Goods In** — every delivery is received here: supplier, item, **invoiced qty vs
   your own scale's weighed qty**, cost per unit, paid or on account. The weighed qty
-  goes into stock automatically and the item's cost price updates; you pay on the
-  invoiced qty, and any shortage shows red — claim it from the supplier. Unpaid
-  deliveries roll into an **Owing to suppliers** list (your creditors, live).
-- **Stock** — live stock on hand per product (up via Goods In, down with every sale,
-  back up on void), total inventory value at cost, and a red **restock now** list of
-  every item at or below its alert level. A ⚠ appears on the tab when something is low.
-  The **CUTTING / BREAK DOWN** button at the top opens the batch log: weigh the side,
-  cut, weigh every output — stock moves automatically (source out, cuts in), and each
-  batch records its **yield %, waste kg, and retail uplift**. Below-95% batches flag
-  red; the button itself shows your running average yield. Outputs can never weigh
-  more than the input — the app refuses.
-- **Close** — the evening ritual, ~10 minutes: **blind stock count** (weigh every line
-  and enter the scale figure — the app hides what it expects, so the count is a
-  measurement, not a confirmation), then **count the money** (till cash excluding any
+  goes into the **freezer** (main store) automatically and the item's cost price updates;
+  you pay on the invoiced qty, and any shortage shows red — claim it from the supplier.
+  Unpaid deliveries roll into an **Owing to suppliers** list (your creditors, live).
+- **Stock — two locations: freezer → chiller.** Stock lives in the **freezer** (main
+  store, where deliveries land) and the **chiller** (the sales counter, where the cashier
+  is accountable). The tab shows freezer and chiller per product, total value at cost,
+  and a red **restock now** list (fires on total on-hand at/below the alert level). Three
+  buttons at the top:
+  - **Issue to chiller** — move stock from the freezer to the chiller for selling. From
+    that moment the cashier owns it, and it's what the daily Close counts.
+  - **Cutting / break down** — weigh the side, cut, weigh every output: bulk comes **out
+    of the freezer**, the cuts go **into the chiller**. Each batch records **yield %,
+    waste kg, retail uplift**; below-95% flags red; outputs can never weigh more than the
+    input (the app refuses).
+  - **Freezer stock-take (weekly)** — a blind freezer count; the freezer resets to your
+    counts and any shortfall is logged as a **write-off at cost** (shows in Reports).
+  Sales, voids and the daily Close touch the **chiller only**; corrections go through the
+  stock button on **Items** (pick freezer or chiller, reason required, logged).
+- **Close** — the evening ritual, ~10 minutes: **blind chiller count** (weigh every line
+  on the sales counter and enter the scale figure — the app hides what it expects, so the
+  count is a measurement, not a confirmation; the freezer is counted weekly, separately),
+  then **count the money** (till cash excluding any
   float, EcoCash, swipe) and list any **cash paid out of the till** that day (gas, bags,
   casual labour — each needs a reason). Only after saving does the app reveal the
   variances: per-line count-vs-expected in kg and $, and the till gap per payment
   method — with cash pay-outs added back so a legitimate expense never reads as a
   shortage, and captured as an expense in the Day P&L. The record locks
-  permanently and stock resets to the counted figures — physical truth wins, every time.
+  permanently and the **chiller** resets to the counted figures — physical truth wins, every time.
   Lines off by more than the tolerance (default **0.2 kg**) and till gaps beyond **±2%**
   flag red. Past closes are listed on the tab; red-edged cards had problems.
 - **Items** — add/edit/delete product lines: name, category, unit, **sell $** (cost ×
