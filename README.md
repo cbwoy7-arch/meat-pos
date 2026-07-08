@@ -31,7 +31,9 @@ Android app shell.
   record, struck through — audit trail, never deletion). **Copy** gives a paste-ready
   summary; **CSV** exports per-day per-product figures including cost and profit.
   Then the **Day P&L**: gross profit less a daily share of the monthly overheads
-  (set in Settings, absorbed per working day — closed days still carry overhead) =
+  (set in Settings, absorbed per working day — closed days still carry overhead),
+  less **cash expenses** (money paid out of the till, captured at the close) and
+  **write-offs / waste at cost** (spoilage and downward stock corrections) =
   **net operating profit**, plus the **break-even sales/day** figure and, while the
   loan runs, an **"after loan"** line (financing shown separately, never mixed into
   operating profit). A per-day table shows every trading day's sales, GP, overhead
@@ -56,8 +58,11 @@ Android app shell.
 - **Close** — the evening ritual, ~10 minutes: **blind stock count** (weigh every line
   and enter the scale figure — the app hides what it expects, so the count is a
   measurement, not a confirmation), then **count the money** (till cash excluding any
-  float, EcoCash, swipe). Only after saving does the app reveal the variances: per-line
-  count-vs-expected in kg and $, and the till gap per payment method. The record locks
+  float, EcoCash, swipe) and list any **cash paid out of the till** that day (gas, bags,
+  casual labour — each needs a reason). Only after saving does the app reveal the
+  variances: per-line count-vs-expected in kg and $, and the till gap per payment
+  method — with cash pay-outs added back so a legitimate expense never reads as a
+  shortage, and captured as an expense in the Day P&L. The record locks
   permanently and stock resets to the counted figures — physical truth wins, every time.
   Lines off by more than the tolerance (default **0.2 kg**) and till gaps beyond **±2%**
   flag red. Past closes are listed on the tab; red-edged cards had problems.
@@ -74,9 +79,10 @@ Android app shell.
 
 ## Month-end archive (the VAT / tax record base)
 
-Settings → Month-end archive → pick the month → **DOWNLOAD MONTH PACK**: four CSVs
-(sales line-by-line, deliveries, cutting batches, daily closes) plus one JSON of
-everything. Allow multiple downloads when Chrome asks, and save all five files to a
+Settings → Month-end archive → pick the month → **DOWNLOAD MONTH PACK**: five CSVs
+(sales line-by-line, deliveries, cutting batches, daily closes incl. cash paid out,
+and stock adjustments / write-offs) plus one JSON of everything. Allow multiple
+downloads when Chrome asks, and save all six files to a
 Google Drive folder per month — that folder is the PBC's books and the VAT working
 base when registration lands (~Feb–Mar 2027). Then **Clear records older than the
 selected month** to keep the phone light: products, current stock and the audit log
@@ -85,8 +91,8 @@ are never touched, and the newest close is always kept.
 ## The audit trail
 
 Every sensitive action writes an append-only entry the app itself cannot edit or delete:
-deliveries, payments to suppliers, stock adjustments (with the reason), price and cost
-changes, voids, and backup restores. Settings → Audit log shows the last 100. If a number
+deliveries, payments to suppliers, stock adjustments (with the reason), cash paid out
+of the till, price and cost changes, voids, and backup restores. Settings → Audit log shows the last 100. If a number
 looks wrong, the trail says who-did-what-when — that is the difference between a mistake
 and a mystery.
 

@@ -253,6 +253,7 @@ let itemsSnap = null, adjIdx = null;
 let closes = load('mc_closes', []);
 let closeStep = 'start', closeDraft = null, viewTs = null;
 let batches = load('mc_batches', []);
+let adjustments = load('mc_adjust', []);   // valued stock write-offs / corrections (spoilage etc.)
 let cutDraft = null;
 let shop = load('mc_shop', { name:'Meat Centre', line2:'', footer:'Thank you, come again!',
                              printer:'off', auto:false, tolKg:0.2, tolTill:0.02 });
@@ -273,7 +274,8 @@ function save(){ localStorage.setItem('mc_products', JSON.stringify(products));
                  localStorage.setItem('mc_deliveries', JSON.stringify(deliveries));
                  localStorage.setItem('mc_audit', JSON.stringify(audit));
                  localStorage.setItem('mc_closes', JSON.stringify(closes));
-                 localStorage.setItem('mc_batches', JSON.stringify(batches)); }
+                 localStorage.setItem('mc_batches', JSON.stringify(batches));
+                 localStorage.setItem('mc_adjust', JSON.stringify(adjustments)); }
 function logAudit(type, detail){
   audit.push({date:today(), time:new Date().toTimeString().slice(0,5), type, detail});
   if (audit.length > 2000) audit = audit.slice(-1500);   // keep the log from growing forever
@@ -572,6 +574,10 @@ function rangeSales(){ return sales.filter(s => s.date >= repFrom && s.date <= r
 function costOf(name){ const p = products.find(x => x.name === name); return p ? p.cost||0 : 0; }
 function lineCost(l){ return l.kg * (l.cost != null ? l.cost : costOf(l.name)); }
 function lowStock(){ return products.filter(p => p.low > 0 && p.stock <= p.low); }
+// cash legitimately paid out of the till at a close, and the till gap that accounts for it
+function payoutOf(c){ return round2((c.payouts||[]).reduce((s,x)=>s+(parseFloat(x.amt)||0),0)); }
+function tillGapOf(c){ return round2((c.actual.Cash+c.actual.EcoCash+c.actual.Swipe)
+  + payoutOf(c) - (c.theo.Cash+c.theo.EcoCash+c.theo.Swipe)); }
 function agg(){ const m = {};
   for (const s of rangeSales()) if (!s.void)
     for (const l of s.lines){ m[l.name] = m[l.name] || {kg:0, amt:0, cogs:0};
@@ -585,8 +591,10 @@ function reportsView(){
   const cogs = Object.values(a).reduce((s,x)=>s+x.cogs,0);
   // controls figures for the same date range
   const rc = closes.filter(c => c.date >= repFrom && c.date <= repTo);
-  const tillGap = round2(rc.reduce((s,c) =>
-    s + (c.actual.Cash+c.actual.EcoCash+c.actual.Swipe) - (c.theo.Cash+c.theo.EcoCash+c.theo.Swipe), 0));
+  const tillGap = round2(rc.reduce((s,c) => s + tillGapOf(c), 0));
+  const cashExp = round2(rc.reduce((s,c) => s + payoutOf(c), 0));   // cash paid out of the till
+  const ra = adjustments.filter(a => a.date >= repFrom && a.date <= repTo);
+  const wasteCost = round2(ra.filter(a=>a.delta<0).reduce((s,a)=>s + (-a.delta)*(a.cost||0), 0)); // write-offs at cost
   const missing = round2(rc.reduce((s,c) =>
     s + c.lines.filter(l=>l.varVal<0).reduce((x,l)=>x+l.varVal,0), 0));
   const rb = batches.filter(b => b.date >= repFrom && b.date <= repTo);
@@ -600,7 +608,7 @@ function reportsView(){
   const dailyOvh = totOvh/(shop.wdays||30);
   const days = Math.max(1, Math.round((new Date(repTo)-new Date(repFrom))/86400000)+1);
   const ovhRange = round2(dailyOvh*days);
-  const netOp = round2(tot - cogs - ovhRange);
+  const netOp = round2(tot - cogs - ovhRange - wasteCost - cashExp);
   const marginR = tot > 0 ? (tot-cogs)/tot : 0;
   const beDay = marginR > 0 ? round2(dailyOvh/marginR) : null;
   const loanDay = (shop.loan||0)/(shop.wdays||30);
@@ -653,6 +661,10 @@ function reportsView(){
       (closed days still carry overhead):</div>
     <div class="kpis">
       <div class="kpi"><b>${fmt(ovhRange)}</b><span>Overheads (${days} day${days===1?'':'s'})</span></div>
+      <div class="kpi"${cashExp>0?' style="outline:2px solid #fb8c00"':''}>
+        <b>${fmt(cashExp)}</b><span>Cash expenses (till pay-outs)</span></div>
+      <div class="kpi"${wasteCost>0?' style="outline:2px solid #fb8c00"':''}>
+        <b>${fmt(wasteCost)}</b><span>Write-offs / waste (at cost)</span></div>
       <div class="kpi"${netOp<0?' style="outline:2px solid var(--red)"':''}>
         <b>${fmt(netOp)}</b><span>Net operating profit</span></div>
       <div class="kpi"><b>${beDay===null?'—':fmt(beDay)}</b><span>Break-even sales / day</span></div>
@@ -826,8 +838,7 @@ function closeView(){
   if (closeStep === 'result') return closeResult();
   const cards = [...closes].reverse().slice(0,14).map(c => {
     const theoT = round2(c.theo.Cash + c.theo.EcoCash + c.theo.Swipe);
-    const actT = round2(c.actual.Cash + c.actual.EcoCash + c.actual.Swipe);
-    const gap = round2(actT - theoT);
+    const gap = tillGapOf(c);
     const missing = round2(c.lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
     const bad = (theoT > 0 && Math.abs(gap)/theoT > shop.tolTill) || missing < 0;
     return `<div class="salecard" onclick="viewTs=${c.ts};closeStep='result';render()"
@@ -841,7 +852,7 @@ function closeView(){
         every line and enter the scale figure (the app hides what it expects — count blind, that
         is the whole point), <b>2.</b> count the till, <b>3.</b> the app reveals the variances,
         locks the record and resets stock to your counts. The person selling never counts alone.</div>
-      <button class="bigbtn" onclick="closeDraft={counts:{},cash:'',eco:'',swipe:'',note:''};closeStep='count';render()">START DAILY CLOSE</button>
+      <button class="bigbtn" onclick="closeDraft={counts:{},cash:'',eco:'',swipe:'',note:'',payouts:[]};closeStep='count';render()">START DAILY CLOSE</button>
     </div>
     ${cards || '<div class="note">No closes recorded yet.</div>'}`;
 }
@@ -883,7 +894,18 @@ function closeCash(){
         <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="0.00"
                value="${closeDraft.swipe}" onchange="closeDraft.swipe=this.value">
       </div>
-      <div class="itemrow" style="margin-bottom:0">
+      <div class="itemrow lab" style="margin-top:6px"><span>cash paid OUT of the till today (gas, bags, casual labour…)</span></div>
+      ${(closeDraft.payouts||[]).map((po,i) => `<div class="itemrow">
+        <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="$ amount"
+               value="${po.amt}" onchange="closeDraft.payouts[${i}].amt=this.value">
+        <input style="flex:1.6" placeholder="what for (required)"
+               value="${esc(po.reason||'')}" onchange="closeDraft.payouts[${i}].reason=this.value">
+        <button class="del" onclick="closeDraft.payouts.splice(${i},1);render()">✕</button>
+      </div>`).join('')}
+      <button class="bigbtn grey" onclick="(closeDraft.payouts=closeDraft.payouts||[]).push({amt:'',reason:''});render()">+ Add a cash pay-out</button>
+      <div class="note">Every dollar taken from the till for a shop expense goes here — otherwise it
+        reads as a shortage. These are logged and reduce the day's profit.</div>
+      <div class="itemrow" style="margin-bottom:0;margin-top:6px">
         <input style="flex:1" placeholder="Note (optional — anything unusual today)"
                value="${esc(closeDraft.note)}" onchange="closeDraft.note=this.value">
       </div>
@@ -912,13 +934,18 @@ function doClose(){
   const actual = {Cash:round2(parseFloat(closeDraft.cash)||0),
                   EcoCash:round2(parseFloat(closeDraft.eco)||0),
                   Swipe:round2(parseFloat(closeDraft.swipe)||0)};
+  const rawPo = (closeDraft.payouts||[]).filter(p => (parseFloat(p.amt)||0) > 0);
+  if (rawPo.some(p => !String(p.reason||'').trim())){
+    toast('Every cash pay-out needs a reason', true); return; }        // don't lock without it
+  const payouts = rawPo.map(p => ({amt:round2(parseFloat(p.amt)), reason:String(p.reason).trim()}));
   const c = {ts, date:today(), time:new Date().toTimeString().slice(0,5),
-             lines, theo, actual, note:closeDraft.note.trim(), tolKg:shop.tolKg, tolTill:shop.tolTill};
+             lines, theo, actual, payouts, note:closeDraft.note.trim(), tolKg:shop.tolKg, tolTill:shop.tolTill};
   closes.push(c);
   const theoT = round2(theo.Cash + theo.EcoCash + theo.Swipe);
-  const actT = round2(actual.Cash + actual.EcoCash + actual.Swipe);
   const missing = round2(lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
-  logAudit('close', 'till '+fmt(round2(actT-theoT))+' vs takings '+fmt(theoT)+
+  for (const p of payouts) logAudit('cash-payout', fmt(p.amt)+' — '+p.reason);
+  logAudit('close', 'till '+fmt(tillGapOf(c))+' vs takings '+fmt(theoT)+
+    (payoutOf(c)?', cash paid out '+fmt(payoutOf(c)):'')+
     ', missing stock '+fmt(Math.abs(missing))+', '+lines.length+' lines counted (stock reset to counts)');
   viewTs = ts; closeStep = 'result'; save(); render();
 }
@@ -927,14 +954,16 @@ function closeResult(){
   if (!c){ closeStep = 'start'; return closeView(); }
   const tolKg = c.tolKg ?? shop.tolKg, tolTill = c.tolTill ?? shop.tolTill;
   const theoT = round2(c.theo.Cash + c.theo.EcoCash + c.theo.Swipe);
-  const actT = round2(c.actual.Cash + c.actual.EcoCash + c.actual.Swipe);
-  const gap = round2(actT - theoT);
+  const payout = payoutOf(c);
+  const gap = tillGapOf(c);
   const gapBad = theoT > 0 ? Math.abs(gap)/theoT > tolTill : gap !== 0;
   const missing = round2(c.lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
   const flagged = c.lines.filter(l => Math.abs(l.varKg) > tolKg).length;
-  const till = ['Cash','EcoCash','Swipe'].map(m =>
-    `<tr><td>${m}</td><td class="n">${fmt(c.theo[m]||0)}</td><td class="n">${fmt(c.actual[m]||0)}</td>
-     <td class="n">${fmt(round2((c.actual[m]||0)-(c.theo[m]||0)))}</td></tr>`).join('');
+  const till = ['Cash','EcoCash','Swipe'].map(m => {
+    const exp = round2((c.theo[m]||0) - (m==='Cash'?payout:0));   // cash that should be IN the till = takings less pay-outs
+    return `<tr><td>${m}${m==='Cash'&&payout?' (less $'+payout.toFixed(2)+' out)':''}</td>
+     <td class="n">${fmt(exp)}</td><td class="n">${fmt(c.actual[m]||0)}</td>
+     <td class="n">${fmt(round2((c.actual[m]||0)-exp))}</td></tr>`; }).join('');
   const rows = [...c.lines].sort((a,b) => Math.abs(b.varVal)-Math.abs(a.varVal)).map(l => {
     const bad = Math.abs(l.varKg) > tolKg;
     return `<tr${bad?' style="color:var(--red);font-weight:bold"':''}>
@@ -952,6 +981,9 @@ function closeResult(){
     <table style="margin-bottom:8px"><tr><th></th><th class="n">Expected $</th><th class="n">Counted $</th><th class="n">Gap $</th></tr>${till}</table>
     <table><tr><th>Product</th><th class="n">Expected</th><th class="n">Counted</th><th class="n">Var</th><th class="n">Var $</th></tr>
       ${rows || '<tr><td colspan="5" style="color:#999">No lines counted</td></tr>'}</table>
+    ${payout ? `<div class="salecard" style="border-left:4px solid #fb8c00">
+      <b>Cash paid out: ${fmt(payout)}</b>
+      <div class="lines">${c.payouts.map(p=>fmt(p.amt)+' — '+esc(p.reason)).join('<br>')}</div></div>` : ''}
     ${c.note ? `<div class="salecard"><b>Note:</b> <span class="lines">${esc(c.note)}</span></div>` : ''}
     <div class="note">Closed ${c.date} ${c.time}. This record is locked — stock was reset to the
       counted figures. Small negatives are drip/trim loss; a pattern on the same line or the
@@ -1054,8 +1086,11 @@ function adjSave(){ const p = products[adjIdx]; if (!p) return;
   const why = document.getElementById('adj-why').value.trim();
   if (isNaN(v)){ toast('Enter the true quantity', true); return; }
   if (!why){ toast('A reason is required', true); return; }
-  logAudit('stock-adjust', p.name+': '+(p.stock||0).toFixed(3)+' → '+v.toFixed(3)+' '+p.unit+' — '+why);
-  p.stock = round3(v);
+  const from = round3(p.stock||0), to = round3(v), delta = round3(to - from);
+  adjustments.push({ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+    name:p.name, unit:p.unit, from, to, delta, cost:p.cost||0, reason:why}); // delta<0 = write-off at cost
+  logAudit('stock-adjust', p.name+': '+from.toFixed(3)+' → '+to.toFixed(3)+' '+p.unit+' — '+why);
+  p.stock = to;
   adjClose(); save(); render(); toast('Stock adjusted');
 }
 function stockView(){
@@ -1223,8 +1258,8 @@ function settingsView(){
       </div>
       <button class="bigbtn" onclick="archiveMonth()">DOWNLOAD MONTH PACK</button>
       <button class="bigbtn grey" onclick="pruneOld()">Clear records older than selected month</button>
-      <div class="note">Month-end routine: download the pack (4 CSVs + 1 JSON — allow multiple
-        downloads when Chrome asks) and save all five files to Google Drive. That folder is the
+      <div class="note">Month-end routine: download the pack (5 CSVs + 1 JSON — allow multiple
+        downloads when Chrome asks) and save all six files to Google Drive. That folder is the
         VAT / tax record base for the PBC. Then clear old months to keep the phone light —
         products, current stock and the audit log are never cleared, and the newest close is
         always kept.</div>
@@ -1250,15 +1285,15 @@ function changePin(){ pinAsk('Enter NEW 4-digit PIN', p1 =>
     if (p1 === p2) { localStorage.setItem('mc_pin', p1); toast('PIN changed'); }
     else toast('PINs did not match', true);
   })); }
-function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, audit, closes, batches}),
+function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, audit, closes, batches, adjustments}),
   'meat-pos-backup-'+today()+'.json', 'application/json'); }
 // ---------------- month-end archive & prune ----------------
 function archiveMonth(){
   const m = (document.getElementById('arc-m')||{}).value || today().slice(0,7);
   const inM = x => x.date && x.date.startsWith(m);
   const S = sales.filter(inM), D = deliveries.filter(inM),
-        B = batches.filter(inM), C = closes.filter(inM);
-  if (!S.length && !D.length && !B.length && !C.length){
+        B = batches.filter(inM), C = closes.filter(inM), A = adjustments.filter(inM);
+  if (!S.length && !D.length && !B.length && !C.length && !A.length){
     toast('Nothing recorded in '+m, true); return; }
   const q = v => /[",\n]/.test(String(v)) ? '"'+String(v).replace(/"/g,'""')+'"' : String(v);
   const csvOf = rows => rows.map(r => r.map(q).join(',')).join('\n');
@@ -1278,34 +1313,38 @@ function archiveMonth(){
         b.inputCost.toFixed(2), b.outKg.toFixed(3), (Math.round(b.yield*1000)/10), b.waste.toFixed(3),
         b.retail.toFixed(2), b.uplift.toFixed(2), b.outs.map(o=>o.name+' '+o.kg.toFixed(3)).join('; ')])])],
     ['closes-'+m+'.csv', csvOf([
-      ['Date','Time','Takings Cash','Takings EcoCash','Takings Swipe','Counted Cash','Counted EcoCash','Counted Swipe','Till gap','Missing stock $','Lines counted','Lines flagged','Note'],
-      ...C.map(c => { const theoT = c.theo.Cash+c.theo.EcoCash+c.theo.Swipe,
-                            actT = c.actual.Cash+c.actual.EcoCash+c.actual.Swipe;
-        return [c.date, c.time, c.theo.Cash.toFixed(2), c.theo.EcoCash.toFixed(2), c.theo.Swipe.toFixed(2),
+      ['Date','Time','Takings Cash','Takings EcoCash','Takings Swipe','Counted Cash','Counted EcoCash','Counted Swipe','Cash paid out','Till gap','Missing stock $','Lines counted','Lines flagged','Note'],
+      ...C.map(c =>
+        [c.date, c.time, c.theo.Cash.toFixed(2), c.theo.EcoCash.toFixed(2), c.theo.Swipe.toFixed(2),
           c.actual.Cash.toFixed(2), c.actual.EcoCash.toFixed(2), c.actual.Swipe.toFixed(2),
-          round2(actT-theoT).toFixed(2),
+          payoutOf(c).toFixed(2), tillGapOf(c).toFixed(2),
           Math.abs(round2(c.lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0))).toFixed(2),
-          c.lines.length, c.lines.filter(l=>Math.abs(l.varKg)>(c.tolKg??0.2)).length, c.note||''];})])],
+          c.lines.length, c.lines.filter(l=>Math.abs(l.varKg)>(c.tolKg??0.2)).length, c.note||''])])],
+    ['adjustments-'+m+'.csv', csvOf([
+      ['Date','Time','Product','From kg','To kg','Change kg','Cost/unit','Value at cost','Reason'],
+      ...A.map(a => [a.date, a.time, a.name, a.from.toFixed(3), a.to.toFixed(3), a.delta.toFixed(3),
+        (a.cost||0).toFixed(2), round2(a.delta*(a.cost||0)).toFixed(2), a.reason||''])])],
     ['archive-'+m+'.json', JSON.stringify({month:m, exported:today(), products,
-      sales:S, deliveries:D, batches:B, closes:C})]
+      sales:S, deliveries:D, batches:B, closes:C, adjustments:A})]
   ];
   files.forEach(([name, data], i) => setTimeout(() =>
     dl(data, name, name.endsWith('.json')?'application/json':'text/csv'), i*400));
   logAudit('archive', m+' pack exported ('+S.length+' sales, '+D.length+' deliveries, '+
-    B.length+' batches, '+C.length+' closes)');
-  save(); toast('Month pack downloading — save all 5 files to Drive');
+    B.length+' batches, '+C.length+' closes, '+A.length+' adjustments)');
+  save(); toast('Month pack downloading — save all 6 files to Drive');
 }
 function pruneOld(){
   const m = (document.getElementById('arc-m')||{}).value || today().slice(0,7);
   const cut = m + '-01';
   const lastClose = closes[closes.length-1];
-  const n = [sales, deliveries, batches, closes]
+  const n = [sales, deliveries, batches, closes, adjustments]
     .reduce((s,arr) => s + arr.filter(x => x.date < cut).length, 0);
   if (!n){ toast('Nothing older than '+m+' to clear', true); return; }
   ask('Delete '+n+' records dated before '+cut+'? Only do this AFTER downloading their month packs to Drive. Products, stock and the audit log are kept.', () => {
     sales = sales.filter(x => x.date >= cut);
     deliveries = deliveries.filter(x => x.date >= cut);
     batches = batches.filter(x => x.date >= cut);
+    adjustments = adjustments.filter(x => x.date >= cut);
     closes = closes.filter(x => x.date >= cut || x === lastClose);  // keep the newest close: it anchors the next till window
     logAudit('prune', n+' records before '+cut+' cleared after archiving');
     save(); render(); toast(n+' old records cleared');
@@ -1322,6 +1361,7 @@ function restore(){ const inp = document.createElement('input'); inp.type = 'fil
           if (Array.isArray(d.audit)) audit = d.audit;
           if (Array.isArray(d.closes)) closes = d.closes;
           if (Array.isArray(d.batches)) batches = d.batches;
+          if (Array.isArray(d.adjustments)) adjustments = d.adjustments;
           logAudit('restore', 'all data replaced from backup file');
           save(); render(); toast('Backup restored'); });
       } catch(e){ toast('Not a valid backup file', true); } }); };
@@ -1335,7 +1375,7 @@ function clearData(full){
       : 'Clear ALL sales, deliveries, cutting batches, closes and the audit log, and zero every stock figure? Products, prices, overheads and settings are kept. This cannot be undone.',
       () => {
         if (full){ localStorage.clear(); location.reload(); return; }
-        sales = []; deliveries = []; batches = []; closes = []; audit = [];
+        sales = []; deliveries = []; batches = []; closes = []; adjustments = []; audit = [];
         for (const p of products) p.stock = 0;
         ticket = []; closeDraft = null; cutDraft = null; closeStep = 'start'; viewTs = null;
         logAudit('reset', 'test data cleared — all records wiped, stock zeroed, products & settings kept');
