@@ -1235,6 +1235,10 @@ function settingsView(){
       <button onclick="backup()">Download</button></div>
     <div class="setrow"><span>Restore from backup</span>
       <button onclick="restore()">Choose file</button></div>
+    <div class="setrow"><span>Clear test data (keep products &amp; settings)</span>
+      <button onclick="clearData(false)">Clear</button></div>
+    <div class="setrow"><span>Full factory reset</span>
+      <button style="color:var(--red);border-color:var(--red)" onclick="clearData(true)">Reset</button></div>
     <div class="setrow"><span>Lock back office</span>
       <button onclick="pinOK=false;goSell();toast('Locked')">Lock now</button></div>
     <div class="note">Back up weekly and before any phone repair or reset — save the file to
@@ -1322,6 +1326,22 @@ function restore(){ const inp = document.createElement('input'); inp.type = 'fil
           save(); render(); toast('Backup restored'); });
       } catch(e){ toast('Not a valid backup file', true); } }); };
   inp.click();
+}
+function clearData(full){
+  pinAsk('Enter PIN to confirm', pin => {
+    if (pin !== (localStorage.getItem('mc_pin') || '2026')){ toast('Wrong PIN', true); return; }
+    ask(full
+      ? 'FULL RESET: products, prices, overheads, PIN and ALL records go back to factory defaults. This cannot be undone — download a backup first if in any doubt.'
+      : 'Clear ALL sales, deliveries, cutting batches, closes and the audit log, and zero every stock figure? Products, prices, overheads and settings are kept. This cannot be undone.',
+      () => {
+        if (full){ localStorage.clear(); location.reload(); return; }
+        sales = []; deliveries = []; batches = []; closes = []; audit = [];
+        for (const p of products) p.stock = 0;
+        ticket = []; closeDraft = null; cutDraft = null; closeStep = 'start'; viewTs = null;
+        logAudit('reset', 'test data cleared — all records wiped, stock zeroed, products & settings kept');
+        save(); render(); toast('Cleared — ready for real trading');
+      });
+  });
 }
 function dl(data, name, type){ const a = document.createElement('a');
   a.href = URL.createObjectURL(data instanceof Blob ? data : new Blob([data], {type}));
