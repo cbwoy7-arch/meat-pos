@@ -38,13 +38,21 @@ Android app shell.
 - **Stock** — live stock on hand per product (up via Goods In, down with every sale,
   back up on void), total inventory value at cost, and a red **restock now** list of
   every item at or below its alert level. A ⚠ appears on the tab when something is low.
+- **Close** — the evening ritual, ~10 minutes: **blind stock count** (weigh every line
+  and enter the scale figure — the app hides what it expects, so the count is a
+  measurement, not a confirmation), then **count the money** (till cash excluding any
+  float, EcoCash, swipe). Only after saving does the app reveal the variances: per-line
+  count-vs-expected in kg and $, and the till gap per payment method. The record locks
+  permanently and stock resets to the counted figures — physical truth wins, every time.
+  Lines off by more than the tolerance (default **0.2 kg**) and till gaps beyond **±2%**
+  flag red. Past closes are listed on the tab; red-edged cards had problems.
 - **Items** — add/edit/delete product lines: name, category, unit, **sell $** (cost ×
   1.38 rule), **cost $** (buy price — drives profit and restock figures), and **low @**
   (alert level; 0 = no alert). **Stock is read-only here** — deliveries add to it via
   Goods In; corrections go through the stock button, which demands a reason and logs the
   change. Price and cost edits are logged to the audit trail when you press SAVE.
-- **Settings** — change PIN, receipt header/footer + printer setup, **audit log viewer**,
-  backup/restore all data (JSON), lock the office.
+- **Settings** — change PIN, receipt header/footer + printer setup, **Daily Close
+  tolerances**, **audit log viewer**, backup/restore all data (JSON), lock the office.
 
 ## The audit trail
 
@@ -77,13 +85,13 @@ Three printer modes in Settings → Receipts:
 
 There is also a **Print automatically after every sale** switch once a printer is set up.
 
-## Daily close (interim — until the built-in Daily Close ships)
+## Daily close — the rule that runs the shop
 
-The Excel workbook is **retired** — this app is the system of record. Until the built-in
-Daily Close (blind stock count + till reconciliation, next update) arrives: weigh every
-line at closing, write the counts on paper, compare against the **Stock** tab, and count
-the till against the Reports cash/EcoCash/swipe split. Investigate any line off by more
-than **0.2 kg** or a till gap beyond **±2%**.
+The Excel workbook is **retired** — this app is the system of record, and the **Close**
+tab is its control account. Every kilogram counted in, counted out, and turned into money
+we can see. Run it every single evening; the person selling never counts alone. Small
+negative variances are drip and trim loss; a pattern on the same line or same shift is
+not. Missing stock is valued at selling price — what it would have banked.
 
 ## Getting it on the phone
 
@@ -121,6 +129,5 @@ version in the background, the second one runs it.
 ## Known limits (deliberate, for now)
 
 - No multi-device sync.
-- Daily Close (blind count + till reconciliation), cutting-yield log, and the monthly
-  archive export arrive in the next updates.
+- Cutting-yield log and the monthly archive export arrive in the next updates.
 - Not ZIMRA-fiscalised — fine until VAT registration (~Feb–Mar 2027); revisit then.
