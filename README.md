@@ -188,8 +188,10 @@ open that owner link once on your phone (bookmark it). Your phone gets two read-
 - **REPORTS** — the till's full Reports screen, identical cosmetics: range chips, the
   Sales / P&L / Controls sections, the break-even chart, payment split and top-products
   graphics, Copy and CSV. It runs on the last **45 days** of records, which the till
-  uploads at most every 3 minutes (and on Settings → **Send now**), so it can lag the
-  live feed by a couple of minutes. Voiding is till-only — the viewer never writes back.
+  uploads within ~20 seconds of any change (bursts of sales are batched; Settings →
+  **Send now** forces it). The live feed carries a revision stamp, so the viewer
+  re-downloads records only when they actually changed and shows "syncing newer
+  records…" in the meantime. Voiding is till-only — the viewer never writes back.
 
 It is one-way: the till writes, phones only watch; the till stays the master record. Leave the
 field blank to keep it off. The URL is the only key, so keep the owner link private.

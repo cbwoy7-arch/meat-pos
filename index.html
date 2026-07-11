@@ -1530,9 +1530,9 @@ function settingsView(){
       <b style="font-size:15px">Live view — watch from your own phone</b>
       <div class="note" style="margin-top:6px">See the shop from your own phone without touching the till:
         a <b>LIVE</b> tab with today’s sales as they happen, and a <b>REPORTS</b> tab — the full
-        reports screen (charts, P&amp;L, controls) on the last 45 days of records, updated every
-        few minutes. Paste a free relay URL below (one-off setup in the note), then open the
-        owner link on your phone.</div>
+        reports screen (charts, P&amp;L, controls) on the last 45 days of records, following the
+        till within a minute or so of any change. Paste a free relay URL below (one-off setup in
+        the note), then open the owner link on your phone.</div>
       <div class="itemrow" style="margin-top:6px;margin-bottom:0">
         <input style="flex:1" value="${esc(shop.sync||'')}" placeholder="https://….firebaseio.com/meatpos.json"
                onchange="shop.sync=this.value.trim();saveShop();render();toast(shop.sync?'Live view ON':'Live view off')"></div>
@@ -1684,7 +1684,7 @@ function liveSnapshot(){
     .sort((a,b) => b.amt - a.amt);
   const feed = td.slice(-15).reverse().map(s => ({t:s.time, amt:s.total, pay:s.pay,
     n:s.lines.length, first:s.lines[0] ? s.lines[0].name : ''}));
-  return {shop:shop.name, date:d, ts:Date.now(),
+  return {shop:shop.name, date:d, ts:Date.now(), rev:_dataT,   // rev = the records upload viewers should have
     total:round2(td.reduce((a,s)=>a+s.total,0)), n:td.length, split, items, feed};
 }
 // Both feeds nest UNDER the single relay path the user opened in their database rules,
@@ -1708,16 +1708,24 @@ function dataSnapshot(){
     batches: batches.filter(b => b.date >= cut),
     deliveries: deliveries.filter(x => !x.paid || x.date >= cut) };
 }
-let _syncT, _dataT = 0, _dataH;
+let _syncT, _dataT = 0, _dataH = null, _dataDeadline = 0;
 function pushData(force){
   if (viewMode || !shop.sync) return;
-  const since = Date.now() - _dataT;
-  if (!force && since < 180000){
-    clearTimeout(_dataH); _dataH = setTimeout(() => pushData(true), 180000 - since);
+  const now = Date.now();
+  if (!force){                                        // collapse bursts, but never sit on a change >60s
+    if (!_dataDeadline) _dataDeadline = now + 60000;
+    clearTimeout(_dataH);
+    _dataH = setTimeout(() => pushData(true), Math.min(now + 20000, _dataDeadline) - now);
     return;
   }
-  _dataT = Date.now(); clearTimeout(_dataH);
-  try { fetch(relayUrl('data'), {method:'PUT', body:JSON.stringify(dataSnapshot())}); } catch(e){}
+  clearTimeout(_dataH); _dataH = null; _dataDeadline = 0;
+  const snap = dataSnapshot(); _dataT = snap.ts;
+  try {
+    fetch(relayUrl('data'), {method:'PUT', body:JSON.stringify(snap)})
+      .then(() =>                                      // then advertise the new rev on the live feed
+        fetch(relayUrl('live'), {method:'PUT', body:JSON.stringify(liveSnapshot())}))
+      .catch(()=>{});
+  } catch(e){}
 }
 function syncPush(){
   if (viewMode || !shop.sync) return;                 // viewers never write back
@@ -1755,7 +1763,11 @@ function renderView(s){
 function syncPull(){
   if (!shop.sync) return;
   fetch(relayUrl('live'), {cache:'no-store'}).then(r => r.json()).then(s => {
-    if (s && s.ts){ lastLive = s; if (vtab==='live') renderView(s); }   // ts guards against rule-error replies
+    if (s && s.ts){ lastLive = s;
+      if (vtab==='live') renderView(s);
+      // the live feed advertises which records upload is current — re-pull ours if outdated
+      else if (vtab==='reports' && s.rev && vdata && vdata.ts !== s.rev) pullData(true);
+    }
     else if (vtab==='live') waitView();
   }).catch(() => { if (vtab==='live') waitView(); });
 }
@@ -1797,10 +1809,13 @@ function viewRender(){
   const m = document.getElementById('main');
   if (!vdata){ m.innerHTML = '<div class="note" style="text-align:center;margin-top:24px">Fetching the shop’s records…</div>'; pullData(true); return; }
   applyData(vdata);
+  const stale = lastLive && lastLive.rev && vdata.ts !== lastLive.rev;
+  if (stale) pullData(true);
   const ago = Math.max(0, Math.round((Date.now() - (vdata.ts||0))/1000));
   const agoTxt = ago < 90 ? ago+'s' : Math.round(ago/60)+'m';
   m.innerHTML = `<div class="note" style="text-align:center;margin:0 0 4px">records from the till ${agoTxt} ago ·
-      <b style="color:var(--greend)" onclick="pullData(true)">refresh</b> · last 45 days synced</div>`
+      <b style="color:var(--greend)" onclick="pullData(true)">refresh</b> ·
+      ${stale ? '<b style="color:#fb8c00">syncing newer records…</b>' : 'last 45 days synced'}</div>`
     + reportsView();
   m.dataset.got = '1';
 }
