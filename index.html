@@ -380,9 +380,27 @@ function chargeView(){
       </div></div>
     <div class="note">Take the money / confirm the EcoCash or swipe approval BEFORE pressing the button.</div>`;
 }
-function openModal(i){ cur = products[i]; mode = 'kg';
+// selling is chiller-only: an empty chiller line blocks the sale and points at the fix
+function chillerAvail(p){
+  return round3((p.chiller||0) - ticket.filter(l => l.name === p.name).reduce((s,l) => s + l.kg, 0));
+}
+function stockBlock(p){
+  const frz = round3(p.freezer||0);
+  if (frz > 0)
+    ask('No '+p.name+' in the chiller. There is '+frz.toFixed(3)+' '+p.unit+' in the freezer — '+
+        'issue it to the chiller first (owner PIN needed).',
+      () => { office = 'issue'; goOffice(); }, 'ISSUE STOCK', 'var(--green)');
+  else
+    ask('No '+p.name+' in the chiller and the freezer is empty too — reorder from the supplier, '+
+        'then receive the delivery through Goods In (owner PIN needed).',
+      () => { office = 'goods'; goOffice(); }, 'GOODS IN', 'var(--green)');
+}
+function openModal(i){
+  if (chillerAvail(products[i]) <= 0){ stockBlock(products[i]); return; }
+  cur = products[i]; mode = 'kg';
   document.getElementById('m-name').textContent = cur.name;
-  document.getElementById('m-price').textContent = fmt(cur.price)+' per '+cur.unit;
+  document.getElementById('m-price').textContent =
+    fmt(cur.price)+' per '+cur.unit+' · '+chillerAvail(cur).toFixed(3)+' '+cur.unit+' in chiller';
   document.getElementById('tog-kg').textContent = 'By '+(cur.unit==='kg'?'weight':cur.unit);
   setMode('kg');
   const q = document.getElementById('qty'); q.value = '';
@@ -404,6 +422,10 @@ function addLine(){ const v = parseFloat(document.getElementById('qty').value);
   if (!(v>0)) { toast('Enter a quantity', true); return; }
   const kg = mode==='kg' ? round3(v) : round3(v/cur.price);
   const amt = mode==='kg' ? round2(v*cur.price) : round2(v);
+  const avail = chillerAvail(cur);
+  if (avail <= 0){ closeModal(); stockBlock(cur); return; }
+  if (kg > avail + 0.001)                              // counts drift vs the scale — warn, don't block
+    toast('Chiller shows only '+avail.toFixed(3)+' '+cur.unit+' of '+cur.name, true);
   ticket.push({name:cur.name, unit:cur.unit, kg, price:cur.price, cost:cur.cost||0, amt});
   closeModal(); render();
 }
@@ -577,7 +599,10 @@ function pinClose(){ document.getElementById('pinwrap').classList.remove('open')
 
 // ---------------- confirm modal (no window.confirm) ----------------
 let confCb = null;
-function ask(text, cb){ confCb = cb; document.getElementById('c-text').textContent = text;
+function ask(text, cb, yesTxt, yesColor){ confCb = cb;
+  document.getElementById('c-text').textContent = text;
+  const y = document.getElementById('c-yes');
+  y.textContent = yesTxt || 'YES'; y.style.background = yesColor || 'var(--red)';
   document.getElementById('confirm').classList.add('open'); }
 function closeConfirm(yes){ document.getElementById('confirm').classList.remove('open');
   const cb = confCb; confCb = null; if (yes && cb) cb(); }

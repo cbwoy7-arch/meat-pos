@@ -11,7 +11,11 @@ Files: `index.html` (the whole app) · `sw.js` (offline cache) · `manifest.json
 1. Opens on **category tiles** — Beef, Chicken, Pork, Processed (tiles appear/disappear
    automatically as you add categories in the back office).
 2. Tap a category → its items with prices → tap an item → enter **weight** or **$ amount**
-   (converts both ways at the set price).
+   (converts both ways at the set price). The weigh screen shows what the chiller holds.
+   **Selling is chiller-only:** an item with nothing in the chiller can't be rung up — the
+   app prompts to issue stock from the freezer (owner PIN), or, if the freezer is empty
+   too, points at Goods In to reorder. Selling more than the chiller shows warns but
+   doesn't block (counts drift a little against the scale; the daily Close is the truth).
 3. Keep tapping items — every line lands on the same ticket (use ‹ back to switch
    categories). Green **CHARGE** bar shows the running ticket. Tap it → review lines →
    take payment: **CASH**, **ECOCASH**, or **SWIPE** (card machine).
