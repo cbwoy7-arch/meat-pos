@@ -564,10 +564,10 @@ function closeConfirm(yes){ document.getElementById('confirm').classList.remove(
 function officeView(){
   if (office !== 'items') itemsSnap = null;
   const sub = `<div class="subnav">
-    <button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>
     <button class="${office==='goods'?'on':''}" onclick="office='goods';render()">Goods In</button>
     <button class="${['stock','cut','issue','ftake'].includes(office)?'on':''}" onclick="office='stock';ftakeLast=null;render()">Stock${lowStock().length?' ⚠':''}</button>
     <button class="${office==='close'?'on':''}" onclick="office='close';render()">Close</button>
+    <button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>
     <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
     <button class="${office==='settings'||office==='audit'?'on':''}" onclick="office='settings';render()">Settings</button>
   </div>`;
