@@ -172,7 +172,17 @@ version in the background, the second one runs it.
   settings — day one starts clean. **Full factory reset** (also PIN-gated) puts
   absolutely everything back to defaults.
 
+## Live view — watch from a second phone
+
+Settings → **Live view** lets you watch today's sales on your own phone without touching the
+till. One-off: create a free Firebase Realtime Database, allow read + write on one path, and
+paste that path's URL (ending in `.json`) into the till's Settings. Then tap **Copy link** and
+open that owner link once on your phone (bookmark it). Your phone shows a read-only dashboard —
+today's takings, payment split, latest sales and top items — refreshing every 15 seconds. It is
+one-way: the till writes, phones only watch; the till stays the master record. Leave the field
+blank to keep it off. The URL is the only key, so keep the owner link private.
+
 ## Known limits (deliberate, for now)
 
-- No multi-device sync.
+- One selling till only — the live view is read-only, not a second point of sale.
 - Not ZIMRA-fiscalised — fine until VAT registration (~Feb–Mar 2027); revisit then.
