@@ -107,6 +107,24 @@
   td { padding:8px; border-bottom:1px solid #eee; }
   td.n, th.n { text-align:right; }
   .toolbar { display:flex; gap:6px; flex-wrap:wrap; margin:10px 0; align-items:center; }
+  .chips { display:flex; gap:6px; margin:0 0 8px; }
+  .chips button { flex:1; padding:8px 0; border:1px solid #b0bec5; background:#fff;
+                  border-radius:16px; font-size:12px; font-weight:bold; color:#607d8b; }
+  .chips button.on { background:var(--green); color:#fff; border-color:var(--green); }
+  .pillrow { display:flex; gap:6px; margin:0 0 10px; }
+  .pillrow button { flex:1; padding:9px 0; border:0; border-radius:8px; background:#dfe4e7;
+                    font-size:13px; font-weight:bold; color:#607d8b; }
+  .pillrow button.on { background:var(--dark); color:#fff; }
+  .hero { background:#fff; border-radius:10px; padding:14px; text-align:center;
+          box-shadow:0 1px 3px rgba(0,0,0,.15); margin-bottom:8px; }
+  .hero b { font-size:36px; display:block; color:var(--text); margin:2px 0; }
+  .hero span { font-size:13px; color:#78909c; display:block; }
+  .chart { background:#fff; border-radius:10px; padding:10px 10px 8px;
+           box-shadow:0 1px 3px rgba(0,0,0,.15); margin-bottom:8px; }
+  .chart h3 { font-size:13px; font-weight:500; color:#607d8b; margin-bottom:8px; }
+  .leg { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:#607d8b; margin-top:7px; }
+  .leg i { display:inline-block; width:10px; height:10px; border-radius:3px;
+           margin-right:4px; vertical-align:-1px; }
   .toolbar button, .toolbar input[type=date] { padding:9px 11px; border:1px solid #b0bec5;
       border-radius:8px; background:#fff; font-size:14px; font-weight:bold; color:var(--text); }
   .salecard { background:#fff; border-radius:10px; padding:9px 11px; margin-top:8px;
@@ -255,6 +273,7 @@ let audit = load('mc_audit', []);
 let ticket = [], tab = 'sell', view = 'cats', selCat = null;
 let office = 'goods', pinOK = false, cur = null, mode = 'kg';
 let repFrom = today(), repTo = today();
+let repSec = 'sales', repAll = false;
 let itemsSnap = null, adjIdx = null, adjLoc = 'chiller';
 let closes = load('mc_closes', []);
 let closeStep = 'start', closeDraft = null, viewTs = null;
@@ -596,6 +615,91 @@ function agg(){ const m = {};
       m[l.name].kg += l.kg; m[l.name].amt += l.amt; m[l.name].cogs += lineCost(l); }
   return m;
 }
+// ---------------- report range helpers & charts (inline SVG, no libraries) ----------------
+function dstr(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function setRange(k){ const now = new Date();
+  if (k==='today') repFrom = repTo = dstr(now);
+  else if (k==='yest'){ const y = new Date(Date.now()-86400000); repFrom = repTo = dstr(y); }
+  else if (k==='7d'){ repTo = dstr(now); repFrom = dstr(new Date(Date.now()-6*86400000)); }
+  else { repTo = dstr(now); repFrom = dstr(new Date(now.getFullYear(), now.getMonth(), 1)); }
+  repAll = false; render(); }
+function rangeKey(){ const t = dstr(new Date()), y = dstr(new Date(Date.now()-86400000));
+  if (repFrom===t && repTo===t) return 'today';
+  if (repFrom===y && repTo===y) return 'yest';
+  if (repTo===t && repFrom===dstr(new Date(Date.now()-6*86400000))) return '7d';
+  const n = new Date();
+  if (repTo===t && repFrom===dstr(new Date(n.getFullYear(), n.getMonth(), 1))) return 'month';
+  return ''; }
+function barP(x, y, w, h){ const r = Math.min(4, w/2, h);   // rounded top, square baseline
+  return `M${x},${y+h} L${x},${y+r} Q${x},${y} ${x+r},${y} L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z`; }
+function chartDays(byDay, beDay, dailyOvh){
+  const t0 = new Date(repFrom+'T00:00'), t1 = new Date(repTo+'T00:00');
+  if (isNaN(t0) || isNaN(t1) || t1 < t0) return '';
+  const all = [];
+  for (let t = +t0; t <= +t1 && all.length <= 62; t += 86400000) all.push(dstr(new Date(t)));
+  if (all.length < 2 || all.length > 62) return '';        // single day: the hero tells the story
+  const W=360, H=150, Lm=6, Rm=6, Tm=20, Bm=16, pw=W-Lm-Rm, ph=H-Tm-Bm;
+  const max = Math.max(...all.map(d => byDay[d] ? byDay[d].sales : 0), beDay||0);
+  if (!(max > 0)) return '';
+  const yv = v => Tm + ph - v/(max*1.08)*ph;
+  const slot = pw/all.length, bw = Math.min(24, Math.max(3, slot-2));
+  let maxI = 0;
+  all.forEach((d,i) => { if ((byDay[d]?byDay[d].sales:0) > (byDay[all[maxI]]?byDay[all[maxI]].sales:0)) maxI = i; });
+  let hasLoss = false;
+  const bars = all.map((d,i) => {
+    const x = byDay[d]; if (!x || !(x.sales > 0)) return '';
+    const loss = (x.sales - x.cogs - dailyOvh) < 0; if (loss) hasLoss = true;
+    const bx = Lm + slot*i + (slot-bw)/2, by = yv(x.sales);
+    return `<path d="${barP(bx, by, bw, Tm+ph-by)}" fill="${loss ? '#e53935' : '#7cb342'}"/>` +
+      (i===maxI ? `<text x="${bx+bw/2}" y="${by-4}" font-size="10" fill="#455a64" text-anchor="middle">${fmt(round2(x.sales))}</text>` : '');
+  }).join('');
+  const beY = beDay ? yv(beDay) : null;
+  const be = beDay ? `<line x1="${Lm}" x2="${Lm+pw}" y1="${beY}" y2="${beY}" stroke="#37474f" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <text x="${Lm+pw}" y="${beY-4 < 10 ? beY+11 : beY-4}" font-size="9" fill="#607d8b" text-anchor="end">break-even ${fmt(beDay)}/day</text>` : '';
+  return `<div class="chart"><h3>Sales by day</h3>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block" role="img" aria-label="Daily sales bar chart">
+      <line x1="${Lm}" x2="${Lm+pw}" y1="${Tm+ph}" y2="${Tm+ph}" stroke="#cfd8dc" stroke-width="1"/>
+      ${bars}${be}
+      <text x="${Lm}" y="${H-3}" font-size="9" fill="#90a4ae">${all[0].slice(5)}</text>
+      <text x="${Lm+pw}" y="${H-3}" font-size="9" fill="#90a4ae" text-anchor="end">${all[all.length-1].slice(5)}</text>
+    </svg>
+    <div class="leg"><span><i style="background:#7cb342"></i>day's takings</span>
+      ${hasLoss ? '<span><i style="background:#e53935"></i>loss day (GP below overheads)</span>' : ''}</div></div>`;
+}
+function chartPay(parts){
+  const tot = parts.reduce((s,p)=>s+p.amt, 0);
+  if (!(tot > 0)) return '';
+  const W=360, H=26, g=2, vis = parts.filter(p => p.amt > 0);
+  let x = 0;
+  const segs = vis.map((p,i) => {
+    const w = (W - g*(vis.length-1)) * p.amt/tot;
+    const s = `<rect x="${x}" y="0" width="${w}" height="${H}" rx="3" fill="${p.color}"/>`;
+    x += w + g; return s;
+  }).join('');
+  const leg = parts.map(p =>
+    `<span><i style="background:${p.color}"></i>${p.name} ${fmt(p.amt)}</span>`).join('');
+  return `<div class="chart"><h3>Payment split</h3>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block" role="img" aria-label="Payment split bar">${segs}</svg>
+    <div class="leg">${leg}</div></div>`;
+}
+function chartTop(a){
+  const items = Object.keys(a).map(n => ({n, amt:a[n].amt, prof:Math.max(0, a[n].amt-a[n].cogs)}))
+    .filter(x => x.amt > 0).sort((x,y) => y.amt - x.amt).slice(0, 8);
+  if (items.length < 2) return '';
+  const max = items[0].amt;
+  const rows = items.map(it => {
+    const w = Math.max(2, it.amt/max*100), pp = Math.round(it.prof/it.amt*100);
+    return `<div style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:#455a64">
+        <span>${esc(it.n)}</span><span>${fmt(it.amt)}</span></div>
+      <div style="height:12px;border-radius:0 4px 4px 0;background:#dcedc8;width:${w}%;margin-top:2px">
+        <div style="height:12px;width:${pp}%;background:var(--greend);${pp<100?'border-right:2px solid #fff;':'border-radius:0 4px 4px 0;'}"></div>
+      </div></div>`;
+  }).join('');
+  return `<div class="chart"><h3>Top products</h3>${rows}
+    <div class="leg"><span><i style="background:var(--greend)"></i>profit</span>
+      <span><i style="background:#dcedc8"></i>cost of goods</span></div></div>`;
+}
 function reportsView(){
   const list = rangeSales(), a = agg(), live = list.filter(s=>!s.void);
   const tot = live.reduce((s,x)=>s+x.total,0);
@@ -625,6 +729,7 @@ function reportsView(){
   const beDay = marginR > 0 ? round2(dailyOvh/marginR) : null;
   const loanDay = (shop.loan||0)/(shop.wdays||30);
   const afterLoan = round2(netOp - loanDay*days);
+  const leak = round2(Math.abs(missing) + Math.max(0, -tillGap));
   const byDay = {};
   for (const s of live){
     byDay[s.date] = byDay[s.date] || {sales:0, cogs:0};
@@ -637,74 +742,88 @@ function reportsView(){
       <td>${d.slice(5)}</td><td class="n">${fmt(round2(x.sales))}</td>
       <td class="n">${fmt(round2(gp))}</td><td class="n">${fmt(round2(dailyOvh))}</td>
       <td class="n">${fmt(net)}</td></tr>`; }).join('');
+  const head = `<div class="toolbar">
+      <input type="date" value="${repFrom}" onchange="repFrom=this.value;repAll=false;render()">
+      <span>to</span>
+      <input type="date" value="${repTo}" onchange="repTo=this.value;repAll=false;render()">
+      <button onclick="copySummary()">Copy</button>
+      <button onclick="csv()">CSV</button>
+    </div>
+    <div class="chips">
+      <button class="${rangeKey()==='today'?'on':''}" onclick="setRange('today')">Today</button>
+      <button class="${rangeKey()==='yest'?'on':''}" onclick="setRange('yest')">Yesterday</button>
+      <button class="${rangeKey()==='7d'?'on':''}" onclick="setRange('7d')">7 days</button>
+      <button class="${rangeKey()==='month'?'on':''}" onclick="setRange('month')">This month</button>
+    </div>
+    <div class="pillrow">
+      <button class="${repSec==='sales'?'on':''}" onclick="repSec='sales';render()">Sales</button>
+      <button class="${repSec==='pl'?'on':''}" onclick="repSec='pl';render()">P&amp;L</button>
+      <button class="${repSec==='controls'?'on':''}" onclick="repSec='controls';render()">Controls${leak>0?' ⚠':''}</button>
+    </div>`;
+  if (repSec === 'pl'){
+    return head + `
+    <div class="hero"><span>Net operating profit · ${days} day${days===1?'':'s'}</span>
+      <b style="color:${netOp<0?'var(--red)':'var(--greend)'}">${fmt(netOp)}</b>
+      <span>sales − cost of sold − overheads − cash expenses − write-offs</span></div>
+    <div class="kpis">
+      <div class="kpi"><b>${fmt(round2(tot-cogs))}</b><span>Gross profit</span></div>
+      <div class="kpi"><b>${tot?Math.round(marginR*100)+'%':'—'}</b><span>Margin</span></div>
+      <div class="kpi"><b>${fmt(ovhRange)}</b><span>Overheads (${fmt(round2(dailyOvh))}/day)</span></div>
+      <div class="kpi"><b${cashExp>0?' style="color:#fb8c00"':''}>${fmt(cashExp)}</b><span>Cash expenses (till pay-outs)</span></div>
+      <div class="kpi"><b${wasteCost>0?' style="color:#fb8c00"':''}>${fmt(wasteCost)}</b><span>Write-offs / waste (at cost)</span></div>
+      <div class="kpi"><b>${beDay===null?'—':fmt(beDay)}</b><span>Break-even sales / day</span></div>
+      ${shop.loan>0?`<div class="kpi"><b${afterLoan<0?' style="color:var(--red)"':''}>${fmt(afterLoan)}</b><span>After loan (${fmt(round2(loanDay))}/day financing)</span></div>`:''}
+    </div>
+    ${dayRows?`<table style="margin-bottom:8px"><tr><th>Day</th><th class="n">Sales</th><th class="n">GP</th><th class="n">Ovh</th><th class="n">Net</th></tr>${dayRows}</table>`:''}
+    <div class="note">Overheads are absorbed at ${fmt(round2(dailyOvh))}/working day — closed days
+      still carry overhead. Financing is shown separately and never mixed into operating profit.
+      Overheads and the loan are set in Settings.</div>`;
+  }
+  if (repSec === 'controls'){
+    return head + `
+    <div class="hero"><span>Leakage · missing stock + till short</span>
+      <b style="color:${leak>0?'var(--red)':'var(--greend)'}">${fmt(leak)}</b>
+      <span>${rc.length} close${rc.length===1?'':'s'} in this range</span></div>
+    <div class="kpis">
+      <div class="kpi"><b${tillGap<0?' style="color:var(--red)"':''}>${fmt(tillGap)}</b><span>Till gap</span></div>
+      <div class="kpi"><b${missing<0?' style="color:var(--red)"':''}>${fmt(Math.abs(missing))}</b><span>Missing stock at retail</span></div>
+      <div class="kpi"><b${avgY!==null&&avgY<0.95?' style="color:var(--red)"':''}>${avgY===null?'—':(Math.round(avgY*1000)/10)+'%'}</b><span>Cutting yield (${waste.toFixed(1)} kg waste)</span></div>
+      <div class="kpi"><b>${fmt(uplift)}</b><span>Cutting uplift</span></div>
+      <div class="kpi"><b${owe>0?' style="color:#fb8c00"':''}>${fmt(owe)}</b><span>Owing suppliers (now)</span></div>
+    </div>
+    <div class="note">From the daily closes, the cutting log and the supplier book. Anything red
+      needs an answer today — leakage is stock that left the shop without money coming in.</div>`;
+  }
+  // Sales section
   const names = [...products.map(p=>p.name), ...Object.keys(a).filter(n=>!products.some(p=>p.name===n))];
   const rows = names.filter(n=>a[n]).map(n =>
     `<tr><td>${esc(n)}</td><td class="n">${a[n].kg.toFixed(3)}</td><td class="n">${fmt(a[n].amt)}</td>
      <td class="n">${fmt(a[n].amt - a[n].cogs)}</td></tr>`).join('');
-  const cards = [...list].reverse().slice(0,60).map(s =>
+  const allCards = [...list].reverse();
+  const cards = (repAll ? allCards : allCards.slice(0,10)).map(s =>
     `<div class="salecard${s.void?' void':''}">
       <div class="top"><span>${s.date} ${s.time} · ${s.pay}</span><span>${fmt(s.total)}
         <button class="voidbtn" style="border-color:#607d8b;color:#607d8b" onclick="printSale(${s.id})">PRINT</button>
         ${s.void?'':`<button class="voidbtn" onclick="voidSale(${s.id})">VOID</button>`}</span></div>
       <div class="lines">${s.lines.map(l=>esc(l.name)+' '+l.kg.toFixed(3)+esc(l.unit.charAt(0))).join(', ')}</div>
     </div>`).join('');
-  return `<div class="toolbar">
-      <input type="date" value="${repFrom}" onchange="repFrom=this.value;render()">
-      <span>to</span>
-      <input type="date" value="${repTo}" onchange="repTo=this.value;render()">
-      <button onclick="copySummary()">Copy</button>
-      <button onclick="csv()">CSV</button>
-    </div>
-    <div class="kpis">
-      <div class="kpi"><b>${fmt(tot)}</b><span>Total</span></div>
-      <div class="kpi"><b>${fmt(by('Cash'))}</b><span>Cash</span></div>
-      <div class="kpi"><b>${fmt(by('EcoCash'))}</b><span>EcoCash</span></div>
-      <div class="kpi"><b>${fmt(by('Swipe'))}</b><span>Swipe</span></div>
-    </div>
-    <div class="kpis">
-      <div class="kpi"><b>${fmt(cogs)}</b><span>Restock value (cost of sold)</span></div>
-      <div class="kpi"><b>${fmt(tot - cogs)}</b><span>Gross profit</span></div>
-      <div class="kpi"><b>${tot ? Math.round((tot-cogs)/tot*100)+'%' : '—'}</b><span>Margin</span></div>
-      <div class="kpi"${lowStock().length?' style="outline:2px solid var(--red)"':''}>
-        <b>${lowStock().length}</b><span>Need restocking → Stock tab</span></div>
-    </div>
-    <div class="note" style="margin:2px 0 4px"><b>Day P&amp;L</b> — overheads absorbed at
-      ${fmt(round2(dailyOvh))}/working day over ${days} calendar day${days===1?'':'s'}
-      (closed days still carry overhead):</div>
-    <div class="kpis">
-      <div class="kpi"><b>${fmt(ovhRange)}</b><span>Overheads (${days} day${days===1?'':'s'})</span></div>
-      <div class="kpi"${cashExp>0?' style="outline:2px solid #fb8c00"':''}>
-        <b>${fmt(cashExp)}</b><span>Cash expenses (till pay-outs)</span></div>
-      <div class="kpi"${wasteCost>0?' style="outline:2px solid #fb8c00"':''}>
-        <b>${fmt(wasteCost)}</b><span>Write-offs / waste (at cost)</span></div>
-      <div class="kpi"${netOp<0?' style="outline:2px solid var(--red)"':''}>
-        <b>${fmt(netOp)}</b><span>Net operating profit</span></div>
-      <div class="kpi"><b>${beDay===null?'—':fmt(beDay)}</b><span>Break-even sales / day</span></div>
-      ${shop.loan>0?`<div class="kpi"${afterLoan<0?' style="outline:2px solid var(--red)"':''}>
-        <b>${fmt(afterLoan)}</b><span>After loan (${fmt(round2(loanDay))}/day financing)</span></div>`:''}
-    </div>
-    ${dayRows?`<table style="margin-bottom:8px"><tr><th>Day</th><th class="n">Sales</th><th class="n">GP</th><th class="n">Ovh</th><th class="n">Net</th></tr>${dayRows}</table>`:''}
-    <div class="note" style="margin:2px 0 4px"><b>Controls</b> — from the daily closes, cutting log and supplier book:</div>
-    <div class="kpis">
-      <div class="kpi"${tillGap<0?' style="outline:2px solid var(--red)"':''}>
-        <b>${fmt(tillGap)}</b><span>Till gap (${rc.length} close${rc.length===1?'':'s'})</span></div>
-      <div class="kpi"${missing<0?' style="outline:2px solid var(--red)"':''}>
-        <b>${fmt(Math.abs(missing))}</b><span>Missing stock at retail</span></div>
-      <div class="kpi"${avgY!==null&&avgY<0.95?' style="outline:2px solid var(--red)"':''}>
-        <b>${avgY===null?'—':(Math.round(avgY*1000)/10)+'%'}</b><span>Cutting yield (${waste.toFixed(1)} kg waste)</span></div>
-      <div class="kpi"><b>${fmt(uplift)}</b><span>Cutting uplift</span></div>
-      <div class="kpi"${owe>0?' style="outline:2px solid #fb8c00"':''}>
-        <b>${fmt(owe)}</b><span>Owing suppliers (now)</span></div>
-      <div class="kpi"${(Math.abs(missing)+Math.max(0,-tillGap))>0?' style="outline:2px solid var(--red)"':''}>
-        <b>${fmt(round2(Math.abs(missing) + Math.max(0, -tillGap)))}</b><span>Leakage (missing stock + till short)</span></div>
-    </div>
+  return head + `
+    <div class="hero"><span>Takings · ${repFrom===repTo?repFrom:repFrom+' → '+repTo}</span>
+      <b>${fmt(tot)}</b>
+      <span>${live.length} sale${live.length===1?'':'s'} · gross profit ${fmt(round2(tot-cogs))}${tot?' · margin '+Math.round(marginR*100)+'%':''}</span></div>
+    ${chartDays(byDay, beDay, dailyOvh)}
+    ${chartPay([{name:'Cash', amt:round2(by('Cash')), color:'#7cb342'},
+                {name:'EcoCash', amt:round2(by('EcoCash')), color:'#1e88e5'},
+                {name:'Swipe', amt:round2(by('Swipe')), color:'#5e35b1'}])}
+    ${chartTop(a)}
     <table><tr><th>Product</th><th class="n">Sold kg</th><th class="n">Takings $</th><th class="n">Profit $</th></tr>
       ${rows || '<tr><td colspan="4" style="color:#999">No sales in this range</td></tr>'}</table>
     ${cards}
-    <div class="note">This app is the full system — the Excel workbook is retired.
-      Deliveries go in through <b>Goods In</b>; stock corrections through <b>Items → stock</b>
-      with a reason; and every evening ends with the <b>Close</b> tab (blind count + till).
-      Voided sales stay on record but are excluded from totals.</div>`;
+    ${!repAll && allCards.length>10 ? `<button class="bigbtn grey" onclick="repAll=true;render()">SHOW ALL ${allCards.length} SALES</button>` : ''}
+    <div class="note">Restock value of what's sold here is the P&amp;L's cost of sold.
+      Voided sales stay on record but are excluded from totals. Deliveries go in through
+      <b>Goods In</b>; stock corrections through <b>Items → stock</b> with a reason; every
+      evening ends with the <b>Close</b> tab.</div>`;
 }
 function voidSale(id){ ask('Void this sale? It stays on record but is removed from totals.', () => {
   const s = sales.find(x=>x.id===id); if (s) { s.void = true;
