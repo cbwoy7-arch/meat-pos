@@ -272,7 +272,9 @@ if (!Array.isArray(shop.ovh)) shop.ovh = [     // monthly overheads (from the Vi
   {name:'Equipment hire (yr 1)', amt:110}];
 if (shop.wdays == null) shop.wdays = 30;       // working days per month (overhead divisor)
 if (shop.loan == null) shop.loan = 580.18;     // loan repayment $/mo — financing, shown separately
+if (shop.sync == null) shop.sync = '';         // live-view relay URL (empty = feature off)
 let lastSaleId = null;
+const viewMode = new URLSearchParams(location.search).has('view');   // ?view = read-only live dashboard
 function saveShop(){ localStorage.setItem('mc_shop', JSON.stringify(shop)); }
 
 function load(k, d){ try { return JSON.parse(localStorage.getItem(k)) || d; } catch(e){ return d; } }
@@ -282,7 +284,7 @@ function save(){ localStorage.setItem('mc_products', JSON.stringify(products));
                  localStorage.setItem('mc_audit', JSON.stringify(audit));
                  localStorage.setItem('mc_closes', JSON.stringify(closes));
                  localStorage.setItem('mc_batches', JSON.stringify(batches));
-                 localStorage.setItem('mc_adjust', JSON.stringify(adjustments)); }
+                 localStorage.setItem('mc_adjust', JSON.stringify(adjustments)); syncPush(); }
 function logAudit(type, detail){
   audit.push({date:today(), time:new Date().toTimeString().slice(0,5), type, detail});
   if (audit.length > 2000) audit = audit.slice(-1500);   // keep the log from growing forever
@@ -1385,6 +1387,23 @@ function settingsView(){
         products, current stock and the audit log are never cleared, and the newest close is
         always kept.</div>
     </div>
+    <div class="ticket" style="margin-bottom:8px">
+      <b style="font-size:15px">Live view — watch from your own phone</b>
+      <div class="note" style="margin-top:6px">See today’s sales on your phone as they happen, without touching the till.
+        Paste a free relay URL below (one-off setup in the note), then open the owner link on your phone.
+        The till keeps a private copy — this only shows today’s totals.</div>
+      <div class="itemrow" style="margin-top:6px;margin-bottom:0">
+        <input style="flex:1" value="${esc(shop.sync||'')}" placeholder="https://….firebaseio.com/meatpos.json"
+               onchange="shop.sync=this.value.trim();saveShop();render();toast(shop.sync?'Live view ON':'Live view off')"></div>
+      ${shop.sync ? `<div class="note" style="margin-top:6px">Owner link — open once on your phone (then bookmark it):</div>
+        <div class="itemrow" style="margin-bottom:0"><input readonly style="flex:1;font-size:11px" value="${esc(viewLink())}" onclick="this.select()"></div>
+        <div class="mbtns" style="margin-top:4px">
+          <button class="cancel" onclick="copyViewLink()">Copy link</button>
+          <button class="ok" onclick="syncPush();toast('Sent to live view')">Send now</button></div>` : ''}
+      <div class="note">Relay = a free Firebase Realtime Database. Once: create a Firebase project → add a
+        Realtime Database → set its rules so one path allows read + write → paste that path’s URL (ending
+        in <b>.json</b>) here. The URL is the only key — keep the owner link private.</div>
+    </div>
     <div class="setrow"><span>Audit log</span>
       <button onclick="office='audit';render()">View</button></div>
     <div class="setrow"><span>Backup all data</span>
@@ -1510,10 +1529,85 @@ function dl(data, name, type){ const a = document.createElement('a');
   a.download = name; a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href), 5000); }
 
+// ---------------- live view (2nd device, read-only) ----------------
+// One writer (the till) PUTs today's snapshot to shop.sync; viewers GET it. No sync back.
+function liveSnapshot(){
+  const d = today();
+  const td = sales.filter(s => !s.void && s.date === d);
+  const split = {Cash:0, EcoCash:0, Swipe:0};
+  for (const s of td) split[s.pay] = round2((split[s.pay]||0) + s.total);
+  const byItem = {};
+  for (const s of td) for (const l of s.lines){
+    const v = byItem[l.name] || (byItem[l.name] = {kg:0, amt:0}); v.kg += l.kg; v.amt += l.amt; }
+  const items = Object.entries(byItem).map(([name,v]) => ({name, kg:round3(v.kg), amt:round2(v.amt)}))
+    .sort((a,b) => b.amt - a.amt);
+  const feed = td.slice(-15).reverse().map(s => ({t:s.time, amt:s.total, pay:s.pay,
+    n:s.lines.length, first:s.lines[0] ? s.lines[0].name : ''}));
+  return {shop:shop.name, date:d, ts:Date.now(),
+    total:round2(td.reduce((a,s)=>a+s.total,0)), n:td.length, split, items, feed};
+}
+let _syncT;
+function syncPush(){
+  if (viewMode || !shop.sync) return;                 // viewers never write back
+  clearTimeout(_syncT);
+  _syncT = setTimeout(() => {                          // debounce bursts of sales into one PUT
+    try { fetch(shop.sync, {method:'PUT', body:JSON.stringify(liveSnapshot())}); } catch(e){}
+  }, 1500);
+}
+function viewLink(){ return location.origin + location.pathname + '?view#' + encodeURIComponent(shop.sync); }
+function copyViewLink(){ try { navigator.clipboard.writeText(viewLink()); toast('Owner link copied'); }
+  catch(e){ toast('Long-press the link box to copy', true); } }
+function renderView(s){
+  const m = document.getElementById('main');
+  document.getElementById('hdr').innerHTML = esc(s.shop||'Meat Centre') + ' <span style="color:var(--green)">● LIVE</span>';
+  document.getElementById('hdrdate').textContent = s.date || '';
+  const ago = Math.max(0, Math.round((Date.now() - (s.ts||0))/1000));
+  const agoTxt = ago < 90 ? ago+'s ago' : Math.round(ago/60)+'m ago';
+  const sp = s.split || {};
+  const feed = (s.feed||[]).map(f => `<div class="itemrow lab" style="justify-content:space-between;margin-bottom:6px">
+      <span>${esc(f.t)} · ${esc(f.first||'')}${f.n>1?' +'+(f.n-1):''}</span>
+      <span><b>${fmt(f.amt)}</b> <small>${esc(f.pay)}</small></span></div>`).join('') || '<div class="note">No sales yet today.</div>';
+  const items = (s.items||[]).slice(0,8).map(i => `<div class="itemrow lab" style="justify-content:space-between;margin-bottom:6px">
+      <span>${esc(i.name)}</span><span>${i.kg.toFixed(3)} · <b>${fmt(i.amt)}</b></span></div>`).join('') || '<div class="note">—</div>';
+  m.dataset.got = '1';
+  m.innerHTML = `<div class="kpis">
+      <div class="kpi"><b>${fmt(s.total||0)}</b><span>Today's takings</span></div>
+      <div class="kpi"><b>${s.n||0}</b><span>Sales today</span></div>
+      <div class="kpi"><b>${fmt(sp.Cash||0)}</b><span>Cash</span></div>
+      <div class="kpi"><b>${fmt((sp.EcoCash||0)+(sp.Swipe||0))}</b><span>EcoCash + Swipe</span></div></div>
+    <div class="note" style="text-align:center">updated ${agoTxt} · refreshes every 15s</div>
+    <div class="ticket" style="margin:8px 0"><b>Latest sales</b><div style="margin-top:8px">${feed}</div></div>
+    <div class="ticket" style="margin:8px 0"><b>Top items today</b><div style="margin-top:8px">${items}</div></div>`;
+}
+function syncPull(){
+  if (!shop.sync) return;
+  fetch(shop.sync, {cache:'no-store'}).then(r => r.json()).then(s => { if (s) renderView(s); else waitView(); })
+    .catch(() => waitView());
+}
+function waitView(){ const m = document.getElementById('main');
+  if (!m.dataset.got) m.innerHTML = '<div class="note" style="text-align:center;margin-top:24px">Waiting for the shop device to send today’s figures…</div>'; }
+function viewBoot(){
+  document.querySelector('nav').style.display = 'none';
+  document.getElementById('tbar').style.display = 'none';
+  const h = decodeURIComponent((location.hash||'').replace(/^#/,''));
+  if (h){ shop.sync = h; saveShop(); }
+  if (!shop.sync){
+    document.getElementById('hdr').textContent = 'Live view';
+    document.getElementById('main').innerHTML = `<div class="ticket" style="margin:8px 0">
+      <b>Live view setup</b>
+      <div class="note" style="margin-top:6px">Open the owner link from the shop device (Settings → Live view), or paste the relay URL:</div>
+      <div class="itemrow"><input id="vurl" style="flex:1" placeholder="https://….firebaseio.com/….json"></div>
+      <button class="bigbtn" onclick="shop.sync=document.getElementById('vurl').value.trim();saveShop();viewBoot()">Connect</button></div>`;
+    return;
+  }
+  document.getElementById('hdr').textContent = 'Connecting…';
+  syncPull(); setInterval(syncPull, 15000);
+}
+
 // ---------------- boot ----------------
 if ('serviceWorker' in navigator && location.protocol.startsWith('http'))
   navigator.serviceWorker.register('sw.js');
-render();
+if (viewMode) viewBoot(); else render();
 </script>
 </body>
 </html>
