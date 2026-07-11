@@ -47,10 +47,15 @@ Android app shell.
   cutting uplift, what's owing to suppliers right now, and the single number that
   matters — **Leakage** (missing stock + till shortfall), red whenever it isn't zero.
 - **Goods In** — every delivery is received here: supplier, item, **invoiced qty vs
-  your own scale's weighed qty**, cost per unit, paid or on account. The weighed qty
+  your own scale's weighed qty**, cost per unit, paid or on account. The item picker
+  is split in two: **carcass/raw lines** (beef forequarters and hindquarters, pork
+  sides, whole chickens — what the abattoir actually delivers, destined for Cutting)
+  and **ready products** (polony, eggs — things sold as received). The weighed qty
   goes into the **freezer** (main store) automatically and the item's cost price updates;
   you pay on the invoiced qty, and any shortage shows red — claim it from the supplier.
   Unpaid deliveries roll into an **Owing to suppliers** list (your creditors, live).
+  Carcass lines carry the abattoir cost, which flows into cutting batches and from
+  there into product costs and margins.
 - **Stock — two locations: freezer → chiller.** Stock lives in the **freezer** (main
   store, where deliveries land) and the **chiller** (the sales counter, where the cashier
   is accountable). The tab shows freezer and chiller per product, total value at cost,
@@ -61,10 +66,14 @@ Android app shell.
     written to the audit trail). From that moment that person owns it, and it's what
     the daily Close counts — each close names whoever signed for chiller stock since
     the previous close, right next to the variances.
-  - **Cutting / break down** — weigh the side, cut, weigh every output: bulk comes **out
-    of the freezer**, the cuts go **into the chiller**. Each batch records **yield %,
-    waste kg, retail uplift**; below-95% flags red; outputs can never weigh more than the
-    input (the app refuses).
+  - **Cutting / break down** — where **carcass becomes products**: pick the raw line
+    (forequarter, hindquarter, pork side, whole birds — the picker shows what the
+    freezer holds), weigh it in, cut, weigh every output into the product lines. The
+    carcass comes **out of the freezer**, the cuts go **into the chiller**. Each batch
+    records **yield %, waste kg, retail uplift**; below-95% flags red; outputs can
+    never weigh more than the input (the app refuses). Carcass lines never appear on
+    the sell screen, in Issue-to-chiller, or in the chiller Close count — they exist
+    only in the freezer and the weekly freezer stock-take.
   - **Freezer stock-take (weekly)** — a blind freezer count; the freezer resets to your
     counts and any shortfall is logged as a **write-off at cost** (shows in Reports).
   Sales, voids and the daily Close touch the **chiller only**; corrections go through the

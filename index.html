@@ -267,6 +267,15 @@ for (const p of products){                               // migrate older data
   delete p.stock;
   if (p.low == null) p.low = 0;                          // 0 = no restock alert (measured on total on-hand)
 }
+// carcass tier: raw lines from the abattoir (received whole, cut into sellable products)
+if (!localStorage.getItem('mc_rawSeeded')){
+  products.push(
+    {raw:true, name:'Beef Forequarter', unit:'kg', price:0, cost:0, cat:'Carcass', freezer:0, chiller:0, low:0},
+    {raw:true, name:'Beef Hindquarter', unit:'kg', price:0, cost:0, cat:'Carcass', freezer:0, chiller:0, low:0},
+    {raw:true, name:'Pork Side',        unit:'kg', price:0, cost:0, cat:'Carcass', freezer:0, chiller:0, low:0},
+    {raw:true, name:'Whole Chicken',    unit:'kg', price:0, cost:0, cat:'Carcass', freezer:0, chiller:0, low:0});
+  localStorage.setItem('mc_rawSeeded', '1');
+}
 let sales = load('mc_sales', []);
 let deliveries = load('mc_deliveries', []);
 let audit = load('mc_audit', []);
@@ -355,14 +364,15 @@ function tbar(){ const b = document.getElementById('tbar');
 
 // ---------------- SELL ----------------
 function catsView(){
-  return '<div class="grid">' + cats().map(c => {
-    const n = products.filter(p=>p.cat===c).length;
+  const cs = []; for (const p of products) if (!p.raw && !cs.includes(p.cat)) cs.push(p.cat);
+  return '<div class="grid">' + cs.map(c => {
+    const n = products.filter(p=>!p.raw && p.cat===c).length;
     return `<button class="cat" style="background:${catColor(c)}" onclick="selCat='${esc(c)}';view='items';render()">
       ${esc(c)}<small>${n} item${n>1?'s':''}</small></button>`;
   }).join('') + '</div>';
 }
 function itemsGrid(){
-  return '<div class="igrid">' + products.map((p,i) => p.cat!==selCat ? '' :
+  return '<div class="igrid">' + products.map((p,i) => (p.cat!==selCat || p.raw) ? '' :
     `<button style="--cc:${catColor(p.cat)}" onclick="openModal(${i})">${esc(p.name)}
      <small>${fmt(p.price)}/${esc(p.unit)}</small></button>`).join('') + '</div>';
 }
@@ -390,6 +400,10 @@ function stockBlock(p){
     ask('No '+p.name+' in the chiller. There is '+frz.toFixed(3)+' '+p.unit+' in the freezer — '+
         'issue it to the chiller first (owner PIN needed).',
       () => { office = 'issue'; goOffice(); }, 'ISSUE STOCK', 'var(--green)');
+  else if (products.some(x => x.raw && (x.freezer||0) > 0))
+    ask('No '+p.name+' in the chiller or its freezer line — but there is carcass in the freezer. '+
+        'Cut it into products (owner PIN needed), or reorder through Goods In.',
+      () => { office = 'cut'; goOffice(); }, 'CUTTING', 'var(--green)');
   else
     ask('No '+p.name+' in the chiller and the freezer is empty too — reorder from the supplier, '+
         'then receive the delivery through Goods In (owner PIN needed).',
@@ -897,18 +911,25 @@ function cutView(){
     </div>`; }).join('');
   return `<div class="icard">
       <b style="font-size:15px">Cutting / break down</b>
-      <div class="note" style="margin-top:6px">Weigh the side or piece before cutting, cut,
-        then weigh every output. Stock moves automatically: the source comes out of the freezer,
-        the cuts go into the chiller. Beef should return roughly <b>95%+</b> of input as saleable product (bones and
-        offal count) — every lost kg is money off the counter.</div>
+      <div class="note" style="margin-top:6px">This is where <b>carcass becomes products</b>:
+        forequarters/hindquarters, pork sides and whole birds received through Goods In are cut
+        into the item lines you sell. Weigh the piece before cutting, cut, then weigh every
+        output. Stock moves automatically: the carcass comes out of the freezer, the cuts go
+        into the chiller. Beef should return roughly <b>95%+</b> of input as saleable product
+        (bones and offal count) — every lost kg is money off the counter.</div>
       <button class="bigbtn" onclick="cutDraft={src:'',inKg:'',cost:'',outs:[{name:'',kg:''},{name:'',kg:''},{name:'',kg:''}]};render()">START A BATCH</button>
       <button class="bigbtn grey" onclick="office='stock';render()">‹ Back to Stock</button>
     </div>
     ${cards || '<div class="note">No batches recorded yet.</div>'}`;
 }
 function cutEntry(){
-  const opts = sel => products.map(p =>
+  const opts = sel => products.filter(p=>!p.raw).map(p =>
     `<option${sel===p.name?' selected':''}>${esc(p.name)}</option>`).join('');
+  const srcOpts =
+    '<optgroup label="Carcass / raw">' + products.filter(p=>p.raw).map(p =>
+      `<option value="${esc(p.name)}"${cutDraft.src===p.name?' selected':''}>${esc(p.name)} — frz ${(p.freezer||0).toFixed(2)}</option>`).join('') + '</optgroup>' +
+    '<optgroup label="Products (re-cut)">' + products.filter(p=>!p.raw).map(p =>
+      `<option value="${esc(p.name)}"${cutDraft.src===p.name?' selected':''}>${esc(p.name)}</option>`).join('') + '</optgroup>';
   const outRows = cutDraft.outs.map((o,i) =>
     `<div class="itemrow">
       <select style="flex:2" onchange="cutDraft.outs[${i}].name=this.value;cutSum()">
@@ -920,7 +941,7 @@ function cutEntry(){
       <b style="font-size:15px">New batch</b>
       <div class="itemrow" style="margin-top:8px">
         <select style="flex:2" onchange="cutSrc(this.value)">
-          <option value="">— source item —</option>${opts(cutDraft.src)}</select>
+          <option value="">— source item —</option>${srcOpts}</select>
       </div>
       <div class="itemrow lab"><span style="flex:1">input kg (weighed)</span><span style="flex:1">cost $/kg</span></div>
       <div class="itemrow">
@@ -958,10 +979,13 @@ function cutSum(){
   const c = cutCalc(), el = document.getElementById('cut-sum');
   if (!el) return;
   if (!(c.inKg>0) || !c.outs.length){ el.innerHTML = ''; return; }
+  const src = products.find(p => p.name === cutDraft.src);
   el.innerHTML = 'Out '+c.outKg.toFixed(3)+' of '+c.inKg.toFixed(3)+' kg = <b>'+
     (Math.round(c.yieldPct*1000)/10)+'% yield</b> · waste '+c.waste.toFixed(3)+' kg · retail value '+
     fmt(c.retail)+' vs cost '+fmt(c.inputCost)+' = <b>uplift '+fmt(c.uplift)+'</b>'+
-    (c.outKg > c.inKg ? '<br><b style="color:var(--red)">Outputs weigh MORE than the input — recheck.</b>' : '');
+    (c.outKg > c.inKg ? '<br><b style="color:var(--red)">Outputs weigh MORE than the input — recheck.</b>' : '')+
+    (src && c.inKg > (src.freezer||0) + 0.001 ?
+      '<br><b style="color:#fb8c00">Freezer shows only '+(src.freezer||0).toFixed(3)+' kg of '+esc(src.name)+'.</b>' : '');
 }
 function doCut(){
   const c = cutCalc();
@@ -1017,7 +1041,7 @@ function closeView(){
     ${cards || '<div class="note">No closes recorded yet.</div>'}`;
 }
 function closeCount(){
-  const rows = products.map(p =>
+  const rows = products.map(p => p.raw ? '' :             // carcass lives in the freezer, not the chiller
     `<div class="itemrow">
       <span style="flex:2;font-size:14px">${esc(p.name)} <small style="color:#90a4ae">${esc(p.unit)}</small></span>
       <input style="flex:1" type="number" inputmode="decimal" step="any" placeholder="—"
@@ -1082,6 +1106,7 @@ function doClose(){
   for (const s of win) theo[s.pay] = round2((theo[s.pay]||0) + s.total);
   const lines = [];
   for (const p of products){
+    if (p.raw) continue;
     const raw = closeDraft.counts[p.name];
     if (raw === undefined || raw === '') continue;
     const counted = parseFloat(raw);
@@ -1160,7 +1185,11 @@ function closeResult(){
     <button class="bigbtn" onclick="viewTs=null;closeStep='start';render()">DONE</button>`;
 }
 function deliveriesView(){
-  const opts = products.map(p=>`<option>${esc(p.name)}</option>`).join('');
+  const opts =
+    '<optgroup label="Carcass / raw — for cutting">' +
+      products.filter(p=>p.raw).map(p=>`<option>${esc(p.name)}</option>`).join('') + '</optgroup>' +
+    '<optgroup label="Ready products — straight to sale">' +
+      products.filter(p=>!p.raw).map(p=>`<option>${esc(p.name)}</option>`).join('') + '</optgroup>';
   const unpaid = deliveries.filter(d=>!d.paid);
   const owing = {};
   for (const d of unpaid) owing[d.supplier] = (owing[d.supplier]||0) + d.invKg*d.cost;
@@ -1279,7 +1308,7 @@ function stockView(){
   const rows = products.map(p => {
     const isLow = p.low > 0 && onHand(p) <= p.low;
     return `<tr${isLow?' style="color:var(--red);font-weight:bold"':''}>
-      <td>${esc(p.name)}${isLow?' ⚠':''}</td>
+      <td>${esc(p.name)}${p.raw?' <small style="color:#8e24aa">carcass</small>':''}${isLow?' ⚠':''}</td>
       <td class="n">${(p.freezer||0).toFixed(2)}</td>
       <td class="n">${(p.chiller||0).toFixed(2)}</td>
       <td class="n">${fmt(Math.max(0, onHand(p)) * (p.cost||0))}</td></tr>`; }).join('');
@@ -1304,7 +1333,7 @@ function stockView(){
 }
 function issueView(){
   if (!issueDraft) issueDraft = {_who: localStorage.getItem('mc_lastReceiver') || ''};
-  const rows = products.map(p =>
+  const rows = products.map(p => p.raw ? '' :             // carcass goes through Cutting, not here
     `<div class="itemrow">
       <span style="flex:2;font-size:14px">${esc(p.name)}
         <small style="color:#90a4ae">frz ${(p.freezer||0).toFixed(2)} · chl ${(p.chiller||0).toFixed(2)}</small></span>
@@ -1332,6 +1361,7 @@ function doIssue(){
   if (!who){ toast('Enter the name of the person receiving', true); return; }
   const moves = [];
   for (const p of products){
+    if (p.raw) continue;
     const raw = issueDraft[p.name];
     if (raw === undefined || raw === '') continue;
     const kg = parseFloat(raw);
@@ -1411,21 +1441,21 @@ function ftakeResult(){
 function itemsAdmin(){
   if (!itemsSnap) itemsSnap = products.map(p => ({name:p.name, price:p.price, cost:p.cost}));
   const opts = cats().map(c=>`<option>${esc(c)}</option>`).join('');
-  const rows = products.map((p,i) =>
+  const rowFor = (p,i) =>
     `<div class="icard">
       <div class="itemrow">
         <input class="nm" value="${esc(p.name)}" onchange="products[${i}].name=this.value">
-        <input class="ct" value="${esc(p.cat)}" list="catlist" onchange="products[${i}].cat=this.value||'Other'">
+        ${p.raw ? '' : `<input class="ct" value="${esc(p.cat)}" list="catlist" onchange="products[${i}].cat=this.value||'Other'">`}
         <button class="del" onclick="delItem(${i})">✕</button>
       </div>
       <div class="itemrow lab">
-        <span class="un">unit</span><span class="pr">sell $</span><span class="co">cost $</span>
+        <span class="un">unit</span>${p.raw?'':'<span class="pr">sell $</span>'}<span class="co">cost $</span>
         <span class="st">stock ✎</span><span class="lo">low @</span>
       </div>
       <div class="itemrow" style="margin-bottom:0">
         <input class="un" value="${esc(p.unit)}" onchange="products[${i}].unit=this.value">
-        <input class="pr" type="number" step="0.01" value="${p.price}"
-               onchange="products[${i}].price=parseFloat(this.value)||0">
+        ${p.raw ? '' : `<input class="pr" type="number" step="0.01" value="${p.price}"
+               onchange="products[${i}].price=parseFloat(this.value)||0">`}
         <input class="co" type="number" step="0.01" value="${p.cost}"
                onchange="products[${i}].cost=parseFloat(this.value)||0">
         <button class="st" style="background:#fafafa;border:1px solid #cfd8dc;border-radius:8px;
@@ -1434,9 +1464,16 @@ function itemsAdmin(){
         <input class="lo" type="number" step="any" value="${p.low}"
                onchange="products[${i}].low=parseFloat(this.value)||0">
       </div>
-    </div>`).join('');
-  return `<datalist id="catlist">${opts}</datalist>${rows}
+    </div>`;
+  const prodRows = products.map((p,i) => p.raw ? '' : rowFor(p,i)).join('');
+  const rawRows = products.map((p,i) => p.raw ? rowFor(p,i) : '').join('');
+  return `<datalist id="catlist">${opts}</datalist>${prodRows}
     <button class="bigbtn grey" onclick="products.push({name:'New item',unit:'kg',price:0,cost:0,cat:'Other',freezer:0,chiller:0,low:0});render()">+ Add product line</button>
+    <div class="note" style="margin:12px 0 6px"><b>Carcass / raw lines</b> — what the abattoir
+      delivers (received in Goods In, turned into products by Cutting). No selling price:
+      these never appear on the sell screen.</div>
+    ${rawRows}
+    <button class="bigbtn grey" onclick="products.push({raw:true,name:'New carcass line',unit:'kg',price:0,cost:0,cat:'Carcass',freezer:0,chiller:0,low:0});render()">+ Add carcass line</button>
     <button class="bigbtn" onclick="saveItems()">SAVE</button>
     <div class="note">Type a new category name in the category box to create it — it becomes a
       tile on the sell screen automatically. <b>sell $</b> = selling price (cost × 1.38 rule);
@@ -1726,7 +1763,7 @@ function dataSnapshot(){
     cfg: {name:shop.name, ovh:shop.ovh, wdays:shop.wdays, loan:shop.loan,
           tolKg:shop.tolKg, tolTill:shop.tolTill},
     products: products.map(p => ({name:p.name, unit:p.unit, price:p.price, cost:p.cost,
-      cat:p.cat, freezer:p.freezer||0, chiller:p.chiller||0, low:p.low||0})),
+      cat:p.cat, raw:!!p.raw, freezer:p.freezer||0, chiller:p.chiller||0, low:p.low||0})),
     sales: sales.filter(s => s.date >= cut),
     closes: closes.filter(c => c.date >= cut),
     adjust: adjustments.filter(x => x.date >= cut),
