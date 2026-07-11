@@ -179,7 +179,8 @@ version in the background, the second one runs it.
 
 Settings → **Live view** lets you watch today's sales on your own phone without touching the
 till. One-off: create a free Firebase Realtime Database, allow read + write on one path, and
-paste that path's URL (ending in `.json`) into the till's Settings. Then tap **Copy link** and
+paste that path's URL (ending in `.json`) into the till's Settings. Both feeds live **under**
+that path (`…/live` and `…/data`), so the single rule covers everything. Then tap **Copy link** and
 open that owner link once on your phone (bookmark it). Your phone gets two read-only tabs:
 
 - **LIVE** — today's takings, payment split, latest sales and top items, refreshing every

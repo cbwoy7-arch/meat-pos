@@ -1687,9 +1687,14 @@ function liveSnapshot(){
   return {shop:shop.name, date:d, ts:Date.now(),
     total:round2(td.reduce((a,s)=>a+s.total,0)), n:td.length, split, items, feed};
 }
+// Both feeds nest UNDER the single relay path the user opened in their database rules,
+// so one read+write rule covers them: <path>/live.json and <path>/data.json.
+function relayUrl(child){
+  const m = (shop.sync||'').match(/^(.*?)\.json(\?.*)?$/);
+  return m ? m[1] + '/' + child + '.json' + (m[2]||'') : shop.sync + '/' + child;
+}
 // the full-records payload behind the viewer's Reports tab — heavier, so pushed at most
 // every 3 minutes (and immediately on "Send now") to spare the till's data bundle
-function dataUrl(){ return shop.sync.replace(/\.json($|\?)/, '-data.json$1'); }
 function dataSnapshot(){
   const cut = dstr(new Date(Date.now() - 45*86400000));   // last 45 days is plenty for reports
   return { ts: Date.now(),
@@ -1712,13 +1717,13 @@ function pushData(force){
     return;
   }
   _dataT = Date.now(); clearTimeout(_dataH);
-  try { fetch(dataUrl(), {method:'PUT', body:JSON.stringify(dataSnapshot())}); } catch(e){}
+  try { fetch(relayUrl('data'), {method:'PUT', body:JSON.stringify(dataSnapshot())}); } catch(e){}
 }
 function syncPush(){
   if (viewMode || !shop.sync) return;                 // viewers never write back
   clearTimeout(_syncT);
   _syncT = setTimeout(() => {                          // debounce bursts of sales into one PUT
-    try { fetch(shop.sync, {method:'PUT', body:JSON.stringify(liveSnapshot())}); } catch(e){}
+    try { fetch(relayUrl('live'), {method:'PUT', body:JSON.stringify(liveSnapshot())}); } catch(e){}
     pushData(false);
   }, 1500);
 }
@@ -1749,8 +1754,8 @@ function renderView(s){
 }
 function syncPull(){
   if (!shop.sync) return;
-  fetch(shop.sync, {cache:'no-store'}).then(r => r.json()).then(s => {
-    if (s){ lastLive = s; if (vtab==='live') renderView(s); }
+  fetch(relayUrl('live'), {cache:'no-store'}).then(r => r.json()).then(s => {
+    if (s && s.ts){ lastLive = s; if (vtab==='live') renderView(s); }   // ts guards against rule-error replies
     else if (vtab==='live') waitView();
   }).catch(() => { if (vtab==='live') waitView(); });
 }
@@ -1762,15 +1767,16 @@ function pullData(force){
   if (!shop.sync || vPulling) return;
   if (!force && Date.now() - vdataTs < 150000) return;   // fresh enough
   vPulling = true;
-  fetch(dataUrl(), {cache:'no-store'}).then(r => r.json()).then(d => {
+  fetch(relayUrl('data'), {cache:'no-store'}).then(r => r.json()).then(d => {
     vPulling = false;
-    if (d){ vdata = d; vdataTs = Date.now(); if (vtab==='reports') viewRender(); }
+    if (d && d.ts){ vdata = d; vdataTs = Date.now(); if (vtab==='reports') viewRender(); }
     else if (vtab==='reports' && !vdata) viewNoData();
   }).catch(() => { vPulling = false; if (vtab==='reports' && !vdata) viewNoData(); });
 }
 function viewNoData(){ document.getElementById('main').innerHTML =
-  `<div class="note" style="text-align:center;margin-top:24px">No records received yet — on the till,
-   open Settings → Live view → <b>Send now</b> once (needs app v21+ on the till).</div>`; }
+  `<div class="note" style="text-align:center;margin-top:24px">No records received yet.
+   On the till: close and reopen the app twice so it has the latest version, then
+   Settings → Live view → <b>Send now</b>. Then tap REPORTS here again.</div>`; }
 function applyData(d){
   products = d.products || []; sales = d.sales || []; closes = d.closes || [];
   adjustments = d.adjust || []; batches = d.batches || []; deliveries = d.deliveries || [];
