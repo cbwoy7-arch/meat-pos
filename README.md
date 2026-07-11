@@ -180,10 +180,18 @@ version in the background, the second one runs it.
 Settings → **Live view** lets you watch today's sales on your own phone without touching the
 till. One-off: create a free Firebase Realtime Database, allow read + write on one path, and
 paste that path's URL (ending in `.json`) into the till's Settings. Then tap **Copy link** and
-open that owner link once on your phone (bookmark it). Your phone shows a read-only dashboard —
-today's takings, payment split, latest sales and top items — refreshing every 15 seconds. It is
-one-way: the till writes, phones only watch; the till stays the master record. Leave the field
-blank to keep it off. The URL is the only key, so keep the owner link private.
+open that owner link once on your phone (bookmark it). Your phone gets two read-only tabs:
+
+- **LIVE** — today's takings, payment split, latest sales and top items, refreshing every
+  15 seconds.
+- **REPORTS** — the till's full Reports screen, identical cosmetics: range chips, the
+  Sales / P&L / Controls sections, the break-even chart, payment split and top-products
+  graphics, Copy and CSV. It runs on the last **45 days** of records, which the till
+  uploads at most every 3 minutes (and on Settings → **Send now**), so it can lag the
+  live feed by a couple of minutes. Voiding is till-only — the viewer never writes back.
+
+It is one-way: the till writes, phones only watch; the till stays the master record. Leave the
+field blank to keep it off. The URL is the only key, so keep the owner link private.
 
 ## Known limits (deliberate, for now)
 
