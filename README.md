@@ -52,8 +52,11 @@ Android app shell.
   is accountable). The tab shows freezer and chiller per product, total value at cost,
   and a red **restock now** list (fires on total on-hand at/below the alert level). Three
   buttons at the top:
-  - **Issue to chiller** — move stock from the freezer to the chiller for selling. From
-    that moment the cashier owns it, and it's what the daily Close counts.
+  - **Issue to chiller** — move stock from the freezer to the chiller for selling.
+    Every issue records **who received it** (name required, remembered for next time,
+    written to the audit trail). From that moment that person owns it, and it's what
+    the daily Close counts — each close names whoever signed for chiller stock since
+    the previous close, right next to the variances.
   - **Cutting / break down** — weigh the side, cut, weigh every output: bulk comes **out
     of the freezer**, the cuts go **into the chiller**. Each batch records **yield %,
     waste kg, retail uplift**; below-95% flags red; outputs can never weigh more than the

@@ -304,8 +304,10 @@ function save(){ localStorage.setItem('mc_products', JSON.stringify(products));
                  localStorage.setItem('mc_closes', JSON.stringify(closes));
                  localStorage.setItem('mc_batches', JSON.stringify(batches));
                  localStorage.setItem('mc_adjust', JSON.stringify(adjustments)); syncPush(); }
-function logAudit(type, detail){
-  audit.push({date:today(), time:new Date().toTimeString().slice(0,5), type, detail});
+function logAudit(type, detail, who){
+  const e = {date:today(), time:new Date().toTimeString().slice(0,5), type, detail};
+  if (who) e.who = who;
+  audit.push(e);
   if (audit.length > 2000) audit = audit.slice(-1500);   // keep the log from growing forever
 }
 function today(){ const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -976,7 +978,7 @@ function closeView(){
     return `<div class="salecard" onclick="viewTs=${c.ts};closeStep='result';render()"
       ${bad?'style="border-left:4px solid var(--red)"':''}>
       <div class="top"><span>${c.date} ${c.time}</span><span>till ${gap<0?'':'+'}${fmt(gap).replace('$-','-$')}</span></div>
-      <div class="lines">missing stock ${fmt(Math.abs(missing))} · ${c.lines.length} lines counted · tap to view</div>
+      <div class="lines">missing stock ${fmt(Math.abs(missing))} · ${c.lines.length} lines counted${c.recv&&c.recv.length?' · received by '+c.recv.map(esc).join(', '):''} · tap to view</div>
     </div>`; }).join('');
   return `<div class="icard">
       <b style="font-size:15px">Daily Close</b>
@@ -1071,15 +1073,19 @@ function doClose(){
   if (rawPo.some(p => !String(p.reason||'').trim())){
     toast('Every cash pay-out needs a reason', true); return; }        // don't lock without it
   const payouts = rawPo.map(p => ({amt:round2(parseFloat(p.amt)), reason:String(p.reason).trim()}));
+  // who received chiller stock since the last close — the responsible person(s) for variances
+  const recv = [...new Set(audit.filter(x => x.type === 'issue' && x.who &&
+    new Date(x.date + 'T' + x.time).getTime() > lastTs).map(x => x.who))];
   const c = {ts, date:today(), time:new Date().toTimeString().slice(0,5),
-             lines, theo, actual, payouts, note:closeDraft.note.trim(), tolKg:shop.tolKg, tolTill:shop.tolTill};
+             lines, theo, actual, payouts, recv, note:closeDraft.note.trim(), tolKg:shop.tolKg, tolTill:shop.tolTill};
   closes.push(c);
   const theoT = round2(theo.Cash + theo.EcoCash + theo.Swipe);
   const missing = round2(lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
   for (const p of payouts) logAudit('cash-payout', fmt(p.amt)+' — '+p.reason);
   logAudit('close', 'till '+fmt(tillGapOf(c))+' vs takings '+fmt(theoT)+
     (payoutOf(c)?', cash paid out '+fmt(payoutOf(c)):'')+
-    ', missing stock '+fmt(Math.abs(missing))+', '+lines.length+' lines counted (stock reset to counts)');
+    ', missing stock '+fmt(Math.abs(missing))+', '+lines.length+' lines counted (stock reset to counts)'+
+    (recv.length ? ' — chiller stock received by '+recv.join(', ') : ''));
   viewTs = ts; closeStep = 'result'; save(); render();
 }
 function closeResult(){
@@ -1111,6 +1117,10 @@ function closeResult(){
       <div class="kpi"><b>${fmt(theoT)}</b><span>Takings since last close</span></div>
       <div class="kpi"><b>${flagged}</b><span>Lines over ${tolKg} ${'kg'} tolerance</span></div>
     </div>
+    ${c.recv && c.recv.length ? `<div class="salecard"${(missing<0||flagged)?' style="border-left:4px solid var(--red)"':''}>
+      <b>Chiller stock received by:</b> ${c.recv.map(esc).join(', ')}
+      <div class="lines">Signed for everything issued to the chiller since the previous close —
+        the person to ask about any variance above.</div></div>` : ''}
     <table style="margin-bottom:8px"><tr><th></th><th class="n">Expected $</th><th class="n">Counted $</th><th class="n">Gap $</th></tr>${till}</table>
     <table><tr><th>Product</th><th class="n">Expected</th><th class="n">Counted</th><th class="n">Var</th><th class="n">Var $</th></tr>
       ${rows || '<tr><td colspan="5" style="color:#999">No lines counted</td></tr>'}</table>
@@ -1267,7 +1277,7 @@ function stockView(){
       change logged. The restock alert fires on total on-hand (freezer + chiller).</div>`;
 }
 function issueView(){
-  if (!issueDraft) issueDraft = {};
+  if (!issueDraft) issueDraft = {_who: localStorage.getItem('mc_lastReceiver') || ''};
   const rows = products.map(p =>
     `<div class="itemrow">
       <span style="flex:2;font-size:14px">${esc(p.name)}
@@ -1280,13 +1290,20 @@ function issueView(){
       <b style="font-size:15px">Issue stock to the chiller</b>
       <div class="note" style="margin:6px 0 10px">Move stock from the freezer (main store) to the
         chiller for selling. Enter the kg to move for each line — it comes out of the freezer and into
-        the chiller, and from now the cashier is accountable for it at the daily Close.</div>
+        the chiller, and from now the person receiving is accountable for it at the daily Close.</div>
+      <div class="itemrow" style="margin-bottom:10px">
+        <input style="flex:1;font-weight:bold" value="${esc(issueDraft._who||'')}"
+               placeholder="Received by (name) — required"
+               onchange="issueDraft._who=this.value">
+      </div>
       ${rows}
       <button class="bigbtn" onclick="doIssue()">ISSUE TO CHILLER</button>
       <button class="bigbtn grey" onclick="issueDraft=null;office='stock';render()">‹ Back to Stock</button>
     </div>`;
 }
 function doIssue(){
+  const who = String(issueDraft._who || '').trim();
+  if (!who){ toast('Enter the name of the person receiving', true); return; }
   const moves = [];
   for (const p of products){
     const raw = issueDraft[p.name];
@@ -1297,13 +1314,14 @@ function doIssue(){
     moves.push({p, kg:round3(kg)});
   }
   if (!moves.length){ toast('Enter at least one amount to issue', true); return; }
-  ask('Issue '+moves.length+' line'+(moves.length>1?'s':'')+' from the freezer to the chiller?', () => {
+  ask('Issue '+moves.length+' line'+(moves.length>1?'s':'')+' from the freezer to the chiller — received by '+who+'?', () => {
     for (const {p, kg} of moves){
       p.freezer = round3((p.freezer||0) - kg);
       p.chiller = round3((p.chiller||0) + kg);
-      logAudit('issue', p.name+' '+kg.toFixed(3)+' '+p.unit+' freezer → chiller');
+      logAudit('issue', p.name+' '+kg.toFixed(3)+' '+p.unit+' freezer → chiller — received by '+who, who);
     }
-    issueDraft = null; save(); render(); toast('Issued to chiller');
+    localStorage.setItem('mc_lastReceiver', who);
+    issueDraft = null; save(); render(); toast('Issued to chiller — received by '+who);
   });
 }
 function ftakeView(){
