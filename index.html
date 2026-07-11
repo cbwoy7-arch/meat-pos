@@ -772,6 +772,7 @@ function reportsView(){
       <div class="kpi"><b${cashExp>0?' style="color:#fb8c00"':''}>${fmt(cashExp)}</b><span>Cash expenses (till pay-outs)</span></div>
       <div class="kpi"><b${wasteCost>0?' style="color:#fb8c00"':''}>${fmt(wasteCost)}</b><span>Write-offs / waste (at cost)</span></div>
       <div class="kpi"><b>${beDay===null?'—':fmt(beDay)}</b><span>Break-even sales / day</span></div>
+      <div class="kpi"><b>${fmt(cogs)}</b><span>Cost of goods sold (reorder value)</span></div>
       ${shop.loan>0?`<div class="kpi"><b${afterLoan<0?' style="color:var(--red)"':''}>${fmt(afterLoan)}</b><span>After loan (${fmt(round2(loanDay))}/day financing)</span></div>`:''}
     </div>
     ${dayRows?`<table style="margin-bottom:8px"><tr><th>Day</th><th class="n">Sales</th><th class="n">GP</th><th class="n">Ovh</th><th class="n">Net</th></tr>${dayRows}</table>`:''}
