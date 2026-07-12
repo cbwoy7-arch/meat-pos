@@ -1336,8 +1336,11 @@ function suppliersView(){
   if (supPayDraft) return supPayView();
   if (supEditDraft) return supEditView();
   if (supSel) return supStatement();
-  // list of all suppliers, biggest balance first
-  const rows = [...suppliers].map(s => ({s, bal:owedBy(s.name)}))
+  // list of all suppliers, biggest balance first — union the registry with any name that
+  // appears on a delivery but was never registered, so no debt can hide
+  const names = [...suppliers.map(s => s.name)];
+  for (const d of deliveries) if (!names.includes(d.supplier)) names.push(d.supplier);
+  const rows = names.map(nm => ({s: suppliers.find(x=>x.name===nm) || {name:nm, phone:'', note:''}, bal:owedBy(nm)}))
     .sort((a,b) => b.bal - a.bal).map(({s,bal}) =>
     `<div class="salecard" onclick="supSel='${esc(s.name).replace(/'/g,"\\'")}';render()">
       <div class="top"><span>${esc(s.name)}</span>
@@ -1448,6 +1451,9 @@ function doSupEdit(){
     logAudit('supplier-added', name);
     supSel = name;
   } else {
+    if (name.toLowerCase() !== d.orig.toLowerCase() &&
+        suppliers.some(x => x.name.toLowerCase() === name.toLowerCase())){
+      toast('Another supplier already has that name', true); return; }
     const s = suppliers.find(x => x.name === d.orig);
     if (s){
       if (name !== d.orig){                       // rename: carry the history on deliveries and payments
