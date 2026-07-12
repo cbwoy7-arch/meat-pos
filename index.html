@@ -67,7 +67,8 @@
   .p-swipe { background:linear-gradient(150deg, #6a41c0, #4d2a97); }
   /* qty modal, generic modal */
   .overlay { position:fixed; inset:0; background:rgba(17,27,34,.5); display:none;
-             align-items:flex-end; z-index:10; backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); }
+             align-items:flex-end; justify-content:center; z-index:10;
+             backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); }
   .overlay.open { display:flex; animation:dim .2s ease; }
   @keyframes dim { from { background:rgba(17,27,34,0); } }
   .overlay .card { background:#fff; width:100%; border-radius:22px 22px 0 0; padding:18px 16px;
@@ -209,6 +210,23 @@
   #splash .sp-skip { position:absolute; bottom:max(26px, env(safe-area-inset-bottom)); left:0; right:0;
                      font-size:12px; opacity:.45; letter-spacing:.6px; animation:pulseskip 2.6s ease infinite; }
   @keyframes pulseskip { 50% { opacity:.18; } }
+  /* tablet (portrait till): use the width without stretching the phone layout */
+  @media (min-width:700px){
+    main { padding:16px; }
+    .grid { grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:14px; }
+    .cat { min-height:150px; font-size:20px; }
+    .igrid { grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:12px; }
+    .igrid button { min-height:82px; font-size:15px; padding:15px 8px 14px; }
+    #tbar { width:calc(100% - 32px); max-width:640px; margin:0 auto 14px; padding:17px 18px; }
+    .ticket { max-width:640px; margin-left:auto; margin-right:auto; }
+    main > .note { max-width:640px; margin-left:auto; margin-right:auto; }
+    .overlay .card { max-width:560px; }
+    .kpis { grid-template-columns:repeat(4,1fr); }
+    .pinpad { grid-template-columns:repeat(3,86px); gap:14px; }
+    .pinpad button { width:86px; height:76px; border-radius:20px; }
+    #splash blockquote { max-width:460px; font-size:22px; }
+    #splash h1 { font-size:30px; }
+  }
 </style>
 </head>
 <body>
