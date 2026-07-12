@@ -206,9 +206,6 @@
                        animation:rise .5s ease-out .15s backwards; }
   #splash .sp-ref { margin-top:14px; font-size:14px; color:#abd37e; letter-spacing:.4px;
                     animation:rise .5s ease-out .28s backwards; }
-  #splash.special blockquote { font-family:Georgia,'Times New Roman',serif; font-style:italic;
-                               font-size:30px; font-weight:600; color:#ffd77a; }
-  #splash.special .sp-ref { color:#ffd77a; opacity:.9; }
   #splash .sp-skip { position:absolute; bottom:max(26px, env(safe-area-inset-bottom)); left:0; right:0;
                      font-size:12px; opacity:.45; letter-spacing:.6px; animation:pulseskip 2.6s ease infinite; }
   @keyframes pulseskip { 50% { opacity:.18; } }
@@ -2229,9 +2226,7 @@ function viewBoot(){
 }
 
 // ---------------- welcome splash ----------------
-// One message every start: courage verses, perseverance quotes, and Mr Shambare's words —
-// which stay in the rotation for good and come up more often than anything else.
-const SHAMBARE = { t:'Press on Jake.', w:'Mr Shambare', sp:true };
+// One message every start: courage verses and perseverance quotes.
 const WELCOME = [
   {t:'Fear not, for I am with you; be not dismayed, for I am your God. I will strengthen you, yes, I will help you.', w:'Isaiah 41:10'},
   {t:'Be strong and courageous. Do not be afraid; do not be discouraged, for the LORD your God will be with you wherever you go.', w:'Joshua 1:9'},
@@ -2259,19 +2254,16 @@ const WELCOME = [
 ];
 function showSplash(){
   const h = new Date().getHours();
-  document.getElementById('sp-greet').textContent =
-    h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
-  document.getElementById('sp-date').textContent =
+  const greet = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  document.getElementById('sp-greet').textContent = shop.name || 'Meat Centre';
+  document.getElementById('sp-date').textContent = greet + ' · ' +
     new Date().toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
-  let q = SHAMBARE;                                       // ~1 start in 5 is Mr Shambare's
-  if (Math.random() >= 0.2){
-    const last = +(localStorage.getItem('mc_lastQuote') ?? -1);
-    let i; do { i = Math.floor(Math.random()*WELCOME.length); } while (i === last);
-    localStorage.setItem('mc_lastQuote', i); q = WELCOME[i];
-  }
+  const last = +(localStorage.getItem('mc_lastQuote') ?? -1);
+  let i; do { i = Math.floor(Math.random()*WELCOME.length); } while (i === last);
+  localStorage.setItem('mc_lastQuote', i);
+  const q = WELCOME[i];
   document.getElementById('sp-quote').textContent = q.t;
   document.getElementById('sp-ref').textContent = '— ' + q.w;
-  document.getElementById('splash').classList.toggle('special', !!q.sp);
   showSplash._h = setTimeout(hideSplash, 5200);           // fades out by itself; any tap skips it
 }
 function hideSplash(){
