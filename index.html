@@ -281,6 +281,16 @@ if (localStorage.getItem('mc_rawSeeded') !== '2' && !products.some(p => p.raw)){
 localStorage.setItem('mc_rawSeeded', '2');
 let sales = load('mc_sales', []);
 let deliveries = load('mc_deliveries', []);
+let suppliers = load('mc_suppliers', []);           // recurring supplier accounts {name, phone, note}
+let payments = load('mc_payments', []);             // payments to suppliers {id, ts, date, time, supplier, amt, method, fromTill, note}
+for (const d of deliveries){                        // migrate: record how much of each delivery is settled
+  if (d.pay == null) d.pay = d.paid ? round2(d.invKg * d.cost) : 0;
+}
+for (const d of deliveries){                         // seed the registry from names already used
+  const nm = (d.supplier || '').trim();
+  if (nm && nm !== 'Unknown' && !suppliers.some(s => s.name.toLowerCase() === nm.toLowerCase()))
+    suppliers.push({name:nm, phone:'', note:''});
+}
 let audit = load('mc_audit', []);
 let ticket = [], tab = 'sell', view = 'cats', selCat = null;
 let office = 'goods', pinOK = false, cur = null, mode = 'kg';
@@ -293,6 +303,7 @@ let batches = load('mc_batches', []);
 let adjustments = load('mc_adjust', []);   // valued stock write-offs / corrections (spoilage etc.)
 let cutDraft = null;
 let issueDraft = null, ftakeDraft = null, ftakeLast = null;   // freezer→chiller issue + weekly freezer stock-take
+let supSel = null, supPayDraft = null, supEditDraft = null;   // supplier accounts: open statement / payment form / edit
 let shop = load('mc_shop', { name:'Meat Centre', line2:'', footer:'Thank you, come again!',
                              printer:'off', auto:false, tolKg:0.2, tolTill:0.02 });
 if (shop.tolKg == null) shop.tolKg = 0.2;      // count tolerance per line
@@ -312,6 +323,8 @@ function load(k, d){ try { return JSON.parse(localStorage.getItem(k)) || d; } ca
 function save(){ localStorage.setItem('mc_products', JSON.stringify(products));
                  localStorage.setItem('mc_sales', JSON.stringify(sales));
                  localStorage.setItem('mc_deliveries', JSON.stringify(deliveries));
+                 localStorage.setItem('mc_suppliers', JSON.stringify(suppliers));
+                 localStorage.setItem('mc_payments', JSON.stringify(payments));
                  localStorage.setItem('mc_audit', JSON.stringify(audit));
                  localStorage.setItem('mc_closes', JSON.stringify(closes));
                  localStorage.setItem('mc_batches', JSON.stringify(batches));
@@ -628,7 +641,7 @@ function closeConfirm(yes){ document.getElementById('confirm').classList.remove(
 function officeView(){
   if (office !== 'items') itemsSnap = null;
   const sub = `<div class="subnav">
-    <button class="${office==='goods'?'on':''}" onclick="office='goods';render()">Goods In</button>
+    <button class="${['goods','suppliers'].includes(office)?'on':''}" onclick="office='goods';render()">Goods In</button>
     <button class="${['stock','cut','issue','ftake'].includes(office)?'on':''}" onclick="office='stock';ftakeLast=null;render()">Stock${lowStock().length?' ⚠':''}</button>
     <button class="${office==='close'?'on':''}" onclick="office='close';render()">Close</button>
     <button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>
@@ -637,6 +650,7 @@ function officeView(){
   </div>`;
   if (office==='reports') return sub + reportsView();
   if (office==='goods') return sub + deliveriesView();
+  if (office==='suppliers') return sub + suppliersView();
   if (office==='stock') return sub + stockView();
   if (office==='cut') return sub + cutView();
   if (office==='issue') return sub + issueView();
@@ -763,7 +777,7 @@ function reportsView(){
   const avgY = cutIn > 0 ? rb.reduce((s,b)=>s+b.outKg,0)/cutIn : null;
   const waste = round3(rb.reduce((s,b)=>s+b.waste,0));
   const uplift = round2(rb.reduce((s,b)=>s+b.uplift,0));
-  const owe = round2(deliveries.filter(d=>!d.paid).reduce((s,d)=>s+d.invKg*d.cost,0));
+  const owe = oweTotal();   // net of partial payments
   // Day P&L: absorb monthly overheads at a daily rate over the calendar days in range
   const totOvh = round2(shop.ovh.reduce((s,o)=>s+(o.amt||0),0));
   const dailyOvh = totOvh/(shop.wdays||30);
@@ -1068,11 +1082,18 @@ function closeNext(){
   closeStep = 'cash'; render();
 }
 function closeCash(){
+  const lastTs = closes.length ? closes[closes.length-1].ts : 0;
+  const tillPays = payments.filter(pm => pm.fromTill && !pm.closedTs && pm.ts > lastTs);
+  const tillPaySum = round2(tillPays.reduce((s,pm)=>s+pm.amt,0));
   return `<div class="icard">
       <b style="font-size:15px">Step 2 of 2 — count the money</b>
       <div class="note" style="margin:6px 0 10px">Count what is IN the till. If you keep a float,
         count it separately and do NOT include it here. EcoCash and swipe come off the phone /
         machine statements for the day.</div>
+      ${tillPaySum > 0 ? `<div class="salecard" style="border-left:4px solid #fb8c00;margin-bottom:8px">
+        <b>Supplier payments from the till today: ${fmt(tillPaySum)}</b>
+        <div class="lines">${tillPays.map(pm=>esc(pm.supplier)+' '+fmt(pm.amt)).join(', ')} — added to the
+          pay-outs below automatically, so the till won't read short.</div></div>` : ''}
       <div class="itemrow lab"><span style="flex:1">cash in till $</span><span style="flex:1">EcoCash $</span><span style="flex:1">swipe $</span></div>
       <div class="itemrow">
         <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="0.00"
@@ -1127,6 +1148,10 @@ function doClose(){
   if (rawPo.some(p => !String(p.reason||'').trim())){
     toast('Every cash pay-out needs a reason', true); return; }        // don't lock without it
   const payouts = rawPo.map(p => ({amt:round2(parseFloat(p.amt)), reason:String(p.reason).trim()}));
+  // supplier payments made from the till since the last close appear here automatically,
+  // so a legitimate cash payout never reads as a till shortage
+  const tillPays = payments.filter(pm => pm.fromTill && !pm.closedTs && pm.ts > lastTs && pm.ts <= ts);
+  for (const pm of tillPays){ payouts.push({amt:pm.amt, reason:'Supplier: '+pm.supplier}); pm.closedTs = ts; }
   // who received chiller stock since the last close — the responsible person(s) for variances
   const recv = [...new Set(audit.filter(x => x.type === 'issue' && x.who &&
     new Date(x.date + 'T' + x.time).getTime() > lastTs).map(x => x.who))];
@@ -1193,24 +1218,26 @@ function deliveriesView(){
       products.filter(p=>p.raw).map(p=>`<option>${esc(p.name)}</option>`).join('') + '</optgroup>' +
     '<optgroup label="Ready products — straight to sale">' +
       products.filter(p=>!p.raw).map(p=>`<option>${esc(p.name)}</option>`).join('') + '</optgroup>';
-  const unpaid = deliveries.filter(d=>!d.paid);
+  const oweT = oweTotal();
   const owing = {};
-  for (const d of unpaid) owing[d.supplier] = (owing[d.supplier]||0) + d.invKg*d.cost;
-  const oweTotal = Object.values(owing).reduce((s,x)=>s+x,0);
+  for (const d of deliveries){ const o = outstanding(d); if (o > 0.001) owing[d.supplier] = round2((owing[d.supplier]||0) + o); }
+  const supList = suppliers.map(s=>`<option>${esc(s.name)}</option>`).join('');
   const cards = [...deliveries].reverse().slice(0,30).map(d => {
-    const short = round3(d.wKg - d.invKg);
+    const short = round3(d.wKg - d.invKg), out = outstanding(d);
     return `<div class="salecard">
-      <div class="top"><span>${d.date} ${d.time} · ${esc(d.supplier)}</span><span>${fmt(d.invKg*d.cost)}
-        ${d.paid ? '<span style="color:var(--greend)">PAID</span>'
-          : `<button class="voidbtn" style="border-color:var(--greend);color:var(--greend)" onclick="markPaid(${d.id})">MARK PAID</button>`}</span></div>
+      <div class="top"><span>${d.date} ${d.time} · ${esc(d.supplier)}</span><span>${fmt(invoiceOf(d))}
+        ${out <= 0.001 ? '<span style="color:var(--greend)">PAID</span>'
+          : `<span style="color:#fb8c00">owing ${fmt(out)}</span>
+             <button class="voidbtn" style="border-color:var(--greend);color:var(--greend)" onclick="markPaid(${d.id})">PAY OFF</button>`}</span></div>
       <div class="lines">${esc(d.item)} — invoiced ${d.invKg.toFixed(3)}, weighed ${d.wKg.toFixed(3)} ${esc(d.unit)} @ ${fmt(d.cost)}
         ${short < 0 ? `<span style="color:var(--red);font-weight:bold"> SHORT ${Math.abs(short).toFixed(3)} — claim it</span>`
           : short > 0 ? ` (over by ${short.toFixed(3)})` : ''}${d.note ? ' · '+esc(d.note) : ''}</div>
     </div>`; }).join('');
   return `<div class="icard">
       <b style="font-size:15px">New delivery — weigh it on YOUR scale before signing</b>
+      <datalist id="suplist">${supList}</datalist>
       <div class="itemrow" style="margin-top:8px">
-        <input id="d-sup" style="flex:1.4" placeholder="Supplier">
+        <input id="d-sup" style="flex:1.4" list="suplist" placeholder="Supplier">
         <select id="d-item" style="flex:1.4"><option value="">— item —</option>${opts}</select>
       </div>
       <div class="itemrow lab">
@@ -1227,10 +1254,12 @@ function deliveriesView(){
           <input id="d-paid" type="checkbox">Paid</label>
       </div>
       <button class="bigbtn" onclick="addDelivery()">RECEIVE INTO STOCK</button>
+      <button class="bigbtn grey" onclick="office='suppliers';supSel=null;render()">👥 SUPPLIER ACCOUNTS${oweT>0.001?' · owing '+fmt(oweT):''}</button>
     </div>
-    ${unpaid.length ? `<div class="salecard" style="border-left:4px solid #fb8c00">
-      <b>Owing to suppliers: ${fmt(oweTotal)}</b>
-      <div class="lines">${Object.entries(owing).map(([s,v])=>esc(s)+' — '+fmt(v)).join('<br>')}</div>
+    ${oweT > 0.001 ? `<div class="salecard" style="border-left:4px solid #fb8c00" onclick="office='suppliers';supSel=null;render()">
+      <b>Owing to suppliers: ${fmt(oweT)}</b>
+      <div class="lines">${Object.entries(owing).map(([s,v])=>esc(s)+' — '+fmt(v)).join('<br>')}<br>
+        <span style="color:var(--greend)">tap to open accounts →</span></div>
     </div>` : ''}
     ${cards}
     <div class="note">Weighed qty goes into the <b>freezer</b>; you PAY on invoiced qty — any shortage is claimed
@@ -1245,27 +1274,193 @@ function addDelivery(){
   if (!p){ toast('Choose an item', true); return; }
   if (!(invKg > 0) || !(wKg > 0)){ toast('Enter invoiced AND weighed quantities', true); return; }
   if (!(cost > 0)){ toast('Enter the cost per '+p.unit, true); return; }
+  const paidNow = g('d-paid').checked;
+  const supplier = g('d-sup').value.trim() || 'Unknown';
+  const invoice = round2(round3(invKg) * round2(cost));
   const d = {id:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
-             supplier:(g('d-sup').value.trim() || 'Unknown'), item:name, unit:p.unit,
+             supplier, item:name, unit:p.unit,
              invKg:round3(invKg), wKg:round3(wKg), cost:round2(cost),
-             paid:g('d-paid').checked, note:g('d-note').value.trim()};
+             paid:paidNow, pay:paidNow ? invoice : 0, note:g('d-note').value.trim()};
   deliveries.push(d);
+  ensureSupplier(supplier);
   p.freezer = round3((p.freezer||0) + d.wKg);   // deliveries land in the freezer (main store)
   if (round2(cost) !== p.cost){
     logAudit('cost-change', p.name+': cost '+fmt(p.cost||0)+' → '+fmt(round2(cost))+' (delivery, '+d.supplier+')');
     p.cost = round2(cost);
   }
-  logAudit('delivery', d.item+' +'+d.wKg.toFixed(3)+' '+d.unit+' @ '+fmt(d.cost)+' from '+d.supplier+(d.paid?' (paid)':' (on account)'));
+  logAudit('delivery', d.item+' +'+d.wKg.toFixed(3)+' '+d.unit+' @ '+fmt(d.cost)+' from '+d.supplier+(paidNow?' (paid)':' (on account)'));
   const short = round3(d.wKg - d.invKg);
   save(); render();
   toast(short < 0 ? 'Received — SHORT '+Math.abs(short).toFixed(3)+' '+d.unit+', claim it!'
                   : 'Delivery received into stock');
 }
+// ---------------- supplier accounts ----------------
+function invoiceOf(d){ return round2(d.invKg * d.cost); }
+function outstanding(d){ return round2(invoiceOf(d) - (d.pay||0)); }
+function owedBy(name){ return round2(deliveries.filter(d=>d.supplier===name).reduce((s,d)=>s+outstanding(d),0)); }
+function oweTotal(){ return round2(deliveries.reduce((s,d)=>s+outstanding(d),0)); }
+function ensureSupplier(name){ name = (name||'').trim();
+  if (name && name !== 'Unknown' && !suppliers.some(s => s.name.toLowerCase() === name.toLowerCase()))
+    suppliers.push({name, phone:'', note:''}); }
+// apply a payment to a supplier, settling the oldest outstanding deliveries first
+function applyPayment(supplier, amt, method, fromTill, note){
+  amt = round2(amt);
+  const open = deliveries.filter(d => d.supplier === supplier && outstanding(d) > 0.001)
+    .sort((a,b) => a.id - b.id);
+  let left = amt;
+  const alloc = [];
+  for (const d of open){
+    if (left <= 0.001) break;
+    const take = Math.min(left, outstanding(d));
+    d.pay = round2((d.pay||0) + take);
+    if (outstanding(d) <= 0.001) d.paid = true;
+    alloc.push({deliveryId:d.id, amt:round2(take)});
+    left = round2(left - take);
+  }
+  const pm = {id:Date.now(), ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+              supplier, amt, method, fromTill:!!fromTill, note:(note||'').trim(), alloc,
+              credit:round2(left)};   // credit = overpayment left unallocated
+  payments.push(pm);
+  logAudit('supplier-payment', fmt(amt)+' to '+supplier+' by '+method+(fromTill?' (from till cash)':'')+
+    (note?' — '+note:''), null);
+  return pm;
+}
 function markPaid(id){ const d = deliveries.find(x => x.id === id); if (!d) return;
-  ask('Mark this delivery as paid? '+d.item+' from '+d.supplier+' — '+fmt(d.invKg*d.cost), () => {
-    d.paid = true;
-    logAudit('delivery-paid', d.item+' from '+d.supplier+' — '+fmt(d.invKg*d.cost));
-    save(); render(); }); }
+  const out = outstanding(d);
+  if (out <= 0.001){ toast('Already paid', true); return; }
+  supSel = d.supplier;
+  supPayDraft = {amt:String(out), method:'Cash', fromTill:false, note:'Settle '+d.item+' '+d.date};
+  office = 'suppliers'; render();
+}
+function suppliersView(){
+  if (supPayDraft) return supPayView();
+  if (supEditDraft) return supEditView();
+  if (supSel) return supStatement();
+  // list of all suppliers, biggest balance first
+  const rows = [...suppliers].map(s => ({s, bal:owedBy(s.name)}))
+    .sort((a,b) => b.bal - a.bal).map(({s,bal}) =>
+    `<div class="salecard" onclick="supSel='${esc(s.name).replace(/'/g,"\\'")}';render()">
+      <div class="top"><span>${esc(s.name)}</span>
+        <span${bal>0.001?' style="color:#fb8c00"':' style="color:var(--greend)"'}>${bal>0.001?'owing '+fmt(bal):'settled'}</span></div>
+      <div class="lines">${s.phone?'☎ '+esc(s.phone)+' · ':''}${deliveries.filter(d=>d.supplier===s.name).length} deliveries${s.note?' · '+esc(s.note):''} · tap for statement</div>
+    </div>`).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Supplier accounts</b>
+      <div class="note" style="margin-top:6px">Every supplier you receive from, with the live balance
+        owed on account. Tap one for its statement — deliveries, payments and running balance — and to
+        record a payment. Total owing now: <b>${fmt(oweTotal())}</b>.</div>
+      <button class="bigbtn grey" onclick="supEditDraft={name:'',phone:'',note:'',isNew:true};render()">+ Add a supplier</button>
+      <button class="bigbtn grey" onclick="office='goods';render()">‹ Back to Goods In</button>
+    </div>
+    ${rows || '<div class="note">No suppliers yet — they are added automatically the first time you receive a delivery.</div>'}`;
+}
+function supStatement(){
+  const s = suppliers.find(x => x.name === supSel) || {name:supSel, phone:'', note:''};
+  const bal = owedBy(supSel);
+  const dels = deliveries.filter(d => d.supplier === supSel)
+    .map(d => ({kind:'del', ts:d.id, date:d.date, time:d.time, d}));
+  const pays = payments.filter(p => p.supplier === supSel)
+    .map(p => ({kind:'pay', ts:p.ts, date:p.date, time:p.time, p}));
+  const events = [...dels, ...pays].sort((a,b) => b.ts - a.ts);
+  const rows = events.map(e => e.kind === 'del'
+    ? `<div class="salecard">
+        <div class="top"><span>${e.date} · delivery</span><span style="color:var(--red)">+${fmt(invoiceOf(e.d))}</span></div>
+        <div class="lines">${esc(e.d.item)} ${e.d.invKg.toFixed(3)} ${esc(e.d.unit)} @ ${fmt(e.d.cost)}${outstanding(e.d)>0.001?' · <b style="color:#fb8c00">'+fmt(outstanding(e.d))+' outstanding</b>':' · <span style="color:var(--greend)">settled</span>'}</div>
+      </div>`
+    : `<div class="salecard">
+        <div class="top"><span>${e.date} · payment${e.p.fromTill?' (till cash)':''}</span><span style="color:var(--greend)">−${fmt(e.p.amt)}</span></div>
+        <div class="lines">${esc(e.p.method)}${e.p.note?' · '+esc(e.p.note):''}${e.p.credit>0.001?' · '+fmt(e.p.credit)+' credit in hand':''}</div>
+      </div>`).join('');
+  return `<div class="icard">
+      <div class="top"><b style="font-size:16px">${esc(s.name)}</b>
+        <b style="font-size:16px;color:${bal>0.001?'#fb8c00':'var(--greend)'}">${bal>0.001?'Owing '+fmt(bal):'Settled'}</b></div>
+      ${s.phone?`<div class="note" style="margin-top:4px">☎ <a href="tel:${esc(s.phone)}" style="color:var(--greend)">${esc(s.phone)}</a>${s.note?' · '+esc(s.note):''}</div>`:s.note?`<div class="note" style="margin-top:4px">${esc(s.note)}</div>`:''}
+      <button class="bigbtn" onclick="supPayDraft={amt:'${bal>0.001?bal:''}',method:'Cash',fromTill:false,note:''};render()">RECORD A PAYMENT</button>
+      <div class="mbtns" style="margin-top:6px">
+        <button class="cancel" onclick="supEditDraft={name:'${esc(s.name).replace(/'/g,"\\'")}',phone:'${esc(s.phone||'').replace(/'/g,"\\'")}',note:'${esc(s.note||'').replace(/'/g,"\\'")}',orig:'${esc(s.name).replace(/'/g,"\\'")}'};render()">Edit details</button>
+        <button class="cancel" onclick="supSel=null;render()">‹ All suppliers</button>
+      </div>
+    </div>
+    ${rows || '<div class="note">No activity yet.</div>'}`;
+}
+function supPayView(){
+  const bal = owedBy(supSel);
+  return `<div class="icard">
+      <b style="font-size:15px">Payment to ${esc(supSel)}</b>
+      <div class="note" style="margin-top:4px">Currently owing <b>${fmt(bal)}</b>. Payment settles the
+        oldest deliveries first.</div>
+      <div class="itemrow lab" style="margin-top:8px"><span style="flex:1">amount $</span><span style="flex:1">method</span></div>
+      <div class="itemrow">
+        <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="0.00"
+               value="${esc(supPayDraft.amt)}" onchange="supPayDraft.amt=this.value">
+        <select style="flex:1" onchange="supPayDraft.method=this.value">
+          <option${supPayDraft.method==='Cash'?' selected':''}>Cash</option>
+          <option${supPayDraft.method==='EcoCash'?' selected':''}>EcoCash</option>
+          <option${supPayDraft.method==='Bank'?' selected':''}>Bank</option>
+        </select>
+      </div>
+      <div class="itemrow" style="margin-bottom:0">
+        <input style="flex:1" placeholder="Note (optional)" value="${esc(supPayDraft.note)}"
+               onchange="supPayDraft.note=this.value">
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px">
+        <input type="checkbox" ${supPayDraft.fromTill?'checked':''}
+               onchange="supPayDraft.fromTill=this.checked">
+        Paid from the till cash (adds to tonight's Close as a cash pay-out)</label>
+      <button class="bigbtn" onclick="doSupPay()">RECORD PAYMENT</button>
+      <button class="bigbtn grey" onclick="supPayDraft=null;render()">Cancel</button>
+    </div>`;
+}
+function doSupPay(){
+  const amt = round2(parseFloat(supPayDraft.amt)||0);
+  if (!(amt > 0)){ toast('Enter the amount paid', true); return; }
+  const bal = owedBy(supSel);
+  const over = amt > bal + 0.001;
+  const go = () => {
+    applyPayment(supSel, amt, supPayDraft.method, supPayDraft.fromTill, supPayDraft.note);
+    supPayDraft = null; save(); render();
+    toast('Payment recorded'+(over?' — overpayment kept as credit':''));
+  };
+  if (over) ask('That is more than the '+fmt(bal)+' owing. Record '+fmt(amt)+' anyway? The extra '+
+    fmt(round2(amt-bal))+' shows as credit in hand.', go, 'RECORD', 'var(--green)');
+  else go();
+}
+function supEditView(){
+  const d = supEditDraft;
+  return `<div class="icard">
+      <b style="font-size:15px">${d.isNew?'Add a supplier':'Edit '+esc(d.orig)}</b>
+      <div class="itemrow" style="margin-top:8px"><input style="flex:1" placeholder="Supplier name"
+        value="${esc(d.name)}" onchange="supEditDraft.name=this.value"></div>
+      <div class="itemrow"><input style="flex:1" placeholder="Phone (for the reorder call)"
+        value="${esc(d.phone)}" onchange="supEditDraft.phone=this.value"></div>
+      <div class="itemrow" style="margin-bottom:0"><input style="flex:1" placeholder="Note (optional)"
+        value="${esc(d.note)}" onchange="supEditDraft.note=this.value"></div>
+      <button class="bigbtn" onclick="doSupEdit()">SAVE</button>
+      <button class="bigbtn grey" onclick="supEditDraft=null;render()">Cancel</button>
+    </div>`;
+}
+function doSupEdit(){
+  const d = supEditDraft, name = (d.name||'').trim();
+  if (!name){ toast('Enter a name', true); return; }
+  if (d.isNew){
+    if (suppliers.some(s => s.name.toLowerCase() === name.toLowerCase())){ toast('That supplier already exists', true); return; }
+    suppliers.push({name, phone:(d.phone||'').trim(), note:(d.note||'').trim()});
+    logAudit('supplier-added', name);
+    supSel = name;
+  } else {
+    const s = suppliers.find(x => x.name === d.orig);
+    if (s){
+      if (name !== d.orig){                       // rename: carry the history on deliveries and payments
+        for (const x of deliveries) if (x.supplier === d.orig) x.supplier = name;
+        for (const x of payments) if (x.supplier === d.orig) x.supplier = name;
+        logAudit('supplier-renamed', d.orig+' → '+name);
+      }
+      s.name = name; s.phone = (d.phone||'').trim(); s.note = (d.note||'').trim();
+    }
+    supSel = name;
+  }
+  supEditDraft = null; save(); render(); toast('Saved');
+}
 function auditView(){
   const cards = [...audit].reverse().slice(0,100).map(a =>
     `<div class="salecard"><div class="top"><span>${a.date} ${a.time}</span>
@@ -1631,15 +1826,16 @@ function changePin(){ pinAsk('Enter NEW 4-digit PIN', p1 =>
     if (p1 === p2) { localStorage.setItem('mc_pin', p1); toast('PIN changed'); }
     else toast('PINs did not match', true);
   })); }
-function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, audit, closes, batches, adjustments}),
+function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, suppliers, payments, audit, closes, batches, adjustments}),
   'meat-pos-backup-'+today()+'.json', 'application/json'); }
 // ---------------- month-end archive & prune ----------------
 function archiveMonth(){
   const m = (document.getElementById('arc-m')||{}).value || today().slice(0,7);
   const inM = x => x.date && x.date.startsWith(m);
   const S = sales.filter(inM), D = deliveries.filter(inM),
-        B = batches.filter(inM), C = closes.filter(inM), A = adjustments.filter(inM);
-  if (!S.length && !D.length && !B.length && !C.length && !A.length){
+        B = batches.filter(inM), C = closes.filter(inM), A = adjustments.filter(inM),
+        P = payments.filter(inM);
+  if (!S.length && !D.length && !B.length && !C.length && !A.length && !P.length){
     toast('Nothing recorded in '+m, true); return; }
   const q = v => /[",\n]/.test(String(v)) ? '"'+String(v).replace(/"/g,'""')+'"' : String(v);
   const csvOf = rows => rows.map(r => r.map(q).join(',')).join('\n');
@@ -1650,9 +1846,13 @@ function archiveMonth(){
         s.void?'VOID':'', l.name, l.kg.toFixed(3), l.price.toFixed(2), l.amt.toFixed(2),
         round2(l.kg*(l.cost||0)).toFixed(2)]))])],
     ['deliveries-'+m+'.csv', csvOf([
-      ['Date','Time','Supplier','Item','Invoiced','Weighed','Cost/unit','Total (invoiced x cost)','Paid','Note'],
+      ['Date','Time','Supplier','Item','Invoiced','Weighed','Cost/unit','Total (invoiced x cost)','Paid so far','Outstanding','Note'],
       ...D.map(d => [d.date, d.time, d.supplier, d.item, d.invKg.toFixed(3), d.wKg.toFixed(3),
-        d.cost.toFixed(2), round2(d.invKg*d.cost).toFixed(2), d.paid?'Y':'N', d.note||''])])],
+        d.cost.toFixed(2), invoiceOf(d).toFixed(2), (d.pay||0).toFixed(2), outstanding(d).toFixed(2), d.note||''])])],
+    ['supplier-payments-'+m+'.csv', csvOf([
+      ['Date','Time','Supplier','Amount','Method','From till','Note','Applied to deliveries'],
+      ...P.map(p => [p.date, p.time, p.supplier, p.amt.toFixed(2), p.method, p.fromTill?'Y':'N', p.note||'',
+        (p.alloc||[]).map(a=>String(a.deliveryId).slice(-6)+':'+a.amt.toFixed(2)).join('; ')])])],
     ['cutting-'+m+'.csv', csvOf([
       ['Date','Time','Source','Input kg','Cost/kg','Input cost','Output kg','Yield %','Waste kg','Retail value','Uplift','Outputs'],
       ...B.map(b => [b.date, b.time, b.source, b.inputKg.toFixed(3), (b.costKg||0).toFixed(2),
@@ -1670,25 +1870,27 @@ function archiveMonth(){
       ['Date','Time','Product','Location','From kg','To kg','Change kg','Cost/unit','Value at cost','Reason'],
       ...A.map(a => [a.date, a.time, a.name, a.loc||'', a.from.toFixed(3), a.to.toFixed(3), a.delta.toFixed(3),
         (a.cost||0).toFixed(2), round2(a.delta*(a.cost||0)).toFixed(2), a.reason||''])])],
-    ['archive-'+m+'.json', JSON.stringify({month:m, exported:today(), products,
-      sales:S, deliveries:D, batches:B, closes:C, adjustments:A})]
+    ['archive-'+m+'.json', JSON.stringify({month:m, exported:today(), products, suppliers,
+      sales:S, deliveries:D, batches:B, closes:C, adjustments:A, payments:P})]
   ];
   files.forEach(([name, data], i) => setTimeout(() =>
     dl(data, name, name.endsWith('.json')?'application/json':'text/csv'), i*400));
   logAudit('archive', m+' pack exported ('+S.length+' sales, '+D.length+' deliveries, '+
-    B.length+' batches, '+C.length+' closes, '+A.length+' adjustments)');
+    P.length+' payments, '+B.length+' batches, '+C.length+' closes, '+A.length+' adjustments)');
   save(); toast('Month pack downloading — save all 6 files to Drive');
 }
 function pruneOld(){
   const m = (document.getElementById('arc-m')||{}).value || today().slice(0,7);
   const cut = m + '-01';
   const lastClose = closes[closes.length-1];
-  const n = [sales, deliveries, batches, closes, adjustments]
+  const n = [sales, deliveries, batches, closes, adjustments, payments]
     .reduce((s,arr) => s + arr.filter(x => x.date < cut).length, 0);
   if (!n){ toast('Nothing older than '+m+' to clear', true); return; }
-  ask('Delete '+n+' records dated before '+cut+'? Only do this AFTER downloading their month packs to Drive. Products, stock and the audit log are kept.', () => {
+  ask('Delete '+n+' records dated before '+cut+'? Only do this AFTER downloading their month packs to Drive. Products, suppliers, stock and the audit log are kept.', () => {
     sales = sales.filter(x => x.date >= cut);
-    deliveries = deliveries.filter(x => x.date >= cut);
+    // keep any delivery still owed money even if old, so the debt is never lost
+    deliveries = deliveries.filter(x => x.date >= cut || outstanding(x) > 0.001);
+    payments = payments.filter(x => x.date >= cut);
     batches = batches.filter(x => x.date >= cut);
     adjustments = adjustments.filter(x => x.date >= cut);
     closes = closes.filter(x => x.date >= cut || x === lastClose);  // keep the newest close: it anchors the next till window
@@ -1704,6 +1906,8 @@ function restore(){ const inp = document.createElement('input'); inp.type = 'fil
           products = d.products; sales = d.sales;
           if (d.shop) { shop = d.shop; saveShop(); }
           if (Array.isArray(d.deliveries)) deliveries = d.deliveries;
+          if (Array.isArray(d.suppliers)) suppliers = d.suppliers;
+          if (Array.isArray(d.payments)) payments = d.payments;
           if (Array.isArray(d.audit)) audit = d.audit;
           if (Array.isArray(d.closes)) closes = d.closes;
           if (Array.isArray(d.batches)) batches = d.batches;
@@ -1721,7 +1925,7 @@ function clearData(full){
       : 'Clear ALL sales, deliveries, cutting batches, closes and the audit log, and zero every stock figure? Products, prices, overheads and settings are kept. This cannot be undone.',
       () => {
         if (full){ localStorage.clear(); location.reload(); return; }
-        sales = []; deliveries = []; batches = []; closes = []; adjustments = []; audit = [];
+        sales = []; deliveries = []; suppliers = []; payments = []; batches = []; closes = []; adjustments = []; audit = [];
         for (const p of products){ p.freezer = 0; p.chiller = 0; }
         ticket = []; closeDraft = null; cutDraft = null; closeStep = 'start'; viewTs = null;
         issueDraft = null; ftakeDraft = null; ftakeLast = null;
@@ -1771,7 +1975,9 @@ function dataSnapshot(){
     closes: closes.filter(c => c.date >= cut),
     adjust: adjustments.filter(x => x.date >= cut),
     batches: batches.filter(b => b.date >= cut),
-    deliveries: deliveries.filter(x => !x.paid || x.date >= cut) };
+    deliveries: deliveries.filter(x => outstanding(x) > 0.001 || x.date >= cut),
+    suppliers: suppliers,
+    payments: payments.filter(x => x.date >= cut) };
 }
 let _syncT, _dataT = 0, _dataH = null, _dataDeadline = 0;
 function pushData(force){
@@ -1857,6 +2063,7 @@ function viewNoData(){ document.getElementById('main').innerHTML =
 function applyData(d){
   products = d.products || []; sales = d.sales || []; closes = d.closes || [];
   adjustments = d.adjust || []; batches = d.batches || []; deliveries = d.deliveries || [];
+  suppliers = d.suppliers || []; payments = d.payments || [];
   if (d.cfg){ shop.name = d.cfg.name || shop.name; shop.ovh = d.cfg.ovh || shop.ovh;
     shop.wdays = d.cfg.wdays || shop.wdays; shop.loan = d.cfg.loan ?? shop.loan;
     shop.tolKg = d.cfg.tolKg ?? shop.tolKg; shop.tolTill = d.cfg.tolTill ?? shop.tolTill; }

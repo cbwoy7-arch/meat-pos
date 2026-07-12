@@ -56,6 +56,17 @@ Android app shell.
   Unpaid deliveries roll into an **Owing to suppliers** list (your creditors, live).
   Carcass lines carry the abattoir cost, which flows into cutting batches and from
   there into product costs and margins.
+  - **Supplier accounts** (button on Goods In) — the recurring supplier book. The
+    supplier field on a delivery picks from known names (still typeable for a new one),
+    so the same creditor never splits across spelling variants; a new name is added to
+    the book automatically. Each supplier has a **statement**: every delivery (debit),
+    every payment (credit) and the live balance owed, with their phone number for the
+    reorder call. **Record a payment** — cash, EcoCash or bank — settles the **oldest
+    deliveries first**, so **partial payments** work ($100 off a $186 invoice leaves $86
+    outstanding). Tick **paid from the till cash** and that payment appears in the
+    evening's Close as a cash pay-out automatically, so a real payout never reads as a
+    till shortage. Every payment is logged to the audit trail, and a supplier-payments
+    CSV joins the month-end pack.
 - **Stock — two locations: freezer → chiller.** Stock lives in the **freezer** (main
   store, where deliveries land) and the **chiller** (the sales counter, where the cashier
   is accountable). The tab shows freezer and chiller per product, total value at cost,
