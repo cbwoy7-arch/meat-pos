@@ -366,11 +366,28 @@ function render(){
     else if (view === 'items'){ hdr.innerHTML = `<span class="back" onclick="view='cats';render()">‹</span> ${esc(selCat)}`; m.innerHTML = itemsGrid(); }
     else { hdr.innerHTML = `<span class="back" onclick="view='items';render()">‹</span> Ticket`; m.innerHTML = chargeView(); }
   } else {
-    hdr.textContent = 'Back Office';
+    const cur = navSnapshot();                       // record where we were, so the header ‹ can step back
+    if (!navRestoring && navLast && navKey(navLast) !== navKey(cur)){
+      navStack.push(navLast); if (navStack.length > 40) navStack.shift();
+    }
+    navRestoring = false; navLast = cur;
+    hdr.innerHTML = navStack.length
+      ? `<span class="back" onclick="officeBack()">‹</span> Back Office`
+      : 'Back Office';
     m.innerHTML = officeView();
   }
   tbar();
 }
+// ---- back-office navigation history (header ‹ = previous opened screen) ----
+let navStack = [], navLast = null, navRestoring = false;
+function navSnapshot(){ return {office, supSel, supPayDraft, supEditDraft, cutDraft, issueDraft,
+  ftakeDraft, ftakeLast, closeStep, viewTs, repSec, repAll}; }
+function navKey(s){ return JSON.stringify([s.office, s.supSel, !!s.supPayDraft, !!s.supEditDraft,
+  !!s.cutDraft, !!s.issueDraft, !!s.ftakeDraft, !!s.ftakeLast, s.closeStep, s.viewTs, s.repSec, !!s.repAll]); }
+function officeBack(){ const s = navStack.pop(); if (!s) return; navRestoring = true;
+  office = s.office; supSel = s.supSel; supPayDraft = s.supPayDraft; supEditDraft = s.supEditDraft;
+  cutDraft = s.cutDraft; issueDraft = s.issueDraft; ftakeDraft = s.ftakeDraft; ftakeLast = s.ftakeLast;
+  closeStep = s.closeStep; viewTs = s.viewTs; repSec = s.repSec; repAll = s.repAll; render(); }
 function tbar(){ const b = document.getElementById('tbar');
   const total = ticket.reduce((s,l)=>s+l.amt,0);
   const show = tab==='sell' && view!=='charge' && ticket.length;
@@ -1129,6 +1146,7 @@ function closeCash(){
     </div>`;
 }
 function doClose(){
+  if (closeDraft && closeDraft._done){ toast('This close is already saved', true); return; }  // guard re-submit via back nav
   const ts = Date.now();
   const lastTs = closes.length ? closes[closes.length-1].ts : 0;
   const win = sales.filter(s => !s.void && s.id > lastTs);
@@ -1171,6 +1189,7 @@ function doClose(){
     (payoutOf(c)?', cash paid out '+fmt(payoutOf(c)):'')+
     ', missing stock '+fmt(Math.abs(missing))+', '+lines.length+' lines counted (stock reset to counts)'+
     (recv.length ? ' — chiller stock received by '+recv.join(', ') : ''));
+  closeDraft._done = true;                          // committed — cannot be saved again
   viewTs = ts; closeStep = 'result'; save(); render();
 }
 function closeResult(){
