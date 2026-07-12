@@ -25,9 +25,18 @@ Files: `index.html` (the whole app) · `sw.js` (offline cache) · `manifest.json
 
 ## Back office (the backend)
 
-Bottom-right tab, guarded by an on-screen **PIN pad** (default PIN **2026** — change it in
-Settings on day one). No browser pop-ups are used anywhere, so everything works inside an
-Android app shell.
+Bottom-right tab, guarded by an on-screen **PIN pad**. No browser pop-ups are used anywhere,
+so everything works inside an Android app shell.
+
+There are **two accounts**, told apart by the PIN entered:
+
+- **Owner** (default PIN **2026**) — full back office, including Reports and Settings.
+- **Shop supervisor** (default PIN **1234**) — day-to-day running only: Goods In, Stock,
+  Close and Items, plus a **🔒 Lock** button. **Reports and Settings are hidden**, so the
+  supervisor can trade, receive stock and cash up without seeing profit figures, and can't
+  change PINs, printer/receipt setup or reset the data (all Settings-only actions).
+
+Change both PINs in **Settings** on day one (owner only). The two PINs can't be set the same.
 
 - **Reports** — any date range: total / cash / EcoCash / swipe split, plus **restock
   value** (what the goods sold cost to replace), **gross profit** and **margin %**;

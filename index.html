@@ -293,7 +293,7 @@ for (const d of deliveries){                         // seed the registry from n
 }
 let audit = load('mc_audit', []);
 let ticket = [], tab = 'sell', view = 'cats', selCat = null;
-let office = 'goods', pinOK = false, cur = null, mode = 'kg';
+let office = 'goods', pinOK = false, role = null, cur = null, mode = 'kg';
 let repFrom = today(), repTo = today();
 let repSec = 'sales', repAll = false;
 let itemsSnap = null, adjIdx = null, adjLoc = 'chiller';
@@ -350,11 +350,19 @@ function toast(msg, bad){ const t = document.getElementById('toast'); t.textCont
 // ---------------- navigation / render ----------------
 function goSell(){ tab = 'sell'; if (view === 'office') view = 'cats'; render(); }
 function goOffice(){ if (pinOK) { tab = 'office'; render(); }
-  else pinAsk('Enter owner PIN', pin => {
-    if (pin === (localStorage.getItem('mc_pin') || '2026')) { pinOK = true; tab = 'office'; render(); }
+  else pinAsk('Enter PIN', pin => {
+    if (pin === (localStorage.getItem('mc_pin') || '2026')) {
+      pinOK = true; role = 'owner'; tab = 'office'; render(); }
+    else if (pin === (localStorage.getItem('mc_pin_sup') || '1234')) {
+      pinOK = true; role = 'supervisor';
+      if (['reports','settings','audit'].includes(office)) office = 'goods';
+      tab = 'office'; render(); }
     else { toast('Wrong PIN', true); }
   });
 }
+function lockOffice(){ pinOK = false; role = null; navStack = []; navLast = null;
+  goSell(); toast('Locked'); }
+function canSee(o){ return role === 'owner' || !['reports','settings','audit'].includes(o); }
 function render(){
   if (viewMode){ viewRender(); return; }              // owner's read-only device
   document.getElementById('hdrdate').textContent = today();
@@ -659,13 +667,16 @@ function closeConfirm(yes){ document.getElementById('confirm').classList.remove(
 // ---------------- BACK OFFICE ----------------
 function officeView(){
   if (office !== 'items') itemsSnap = null;
+  if (!canSee(office)) office = 'goods';        // supervisor can't land on owner-only screens
   const sub = `<div class="subnav">
     <button class="${['goods','suppliers'].includes(office)?'on':''}" onclick="office='goods';render()">Goods In</button>
     <button class="${['stock','cut','issue','ftake'].includes(office)?'on':''}" onclick="office='stock';ftakeLast=null;render()">Stock${lowStock().length?' ⚠':''}</button>
     <button class="${office==='close'?'on':''}" onclick="office='close';render()">Close</button>
-    <button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>
+    ${role==='owner'?`<button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>`:''}
     <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
-    <button class="${office==='settings'||office==='audit'?'on':''}" onclick="office='settings';render()">Settings</button>
+    ${role==='owner'
+      ?`<button class="${office==='settings'||office==='audit'?'on':''}" onclick="office='settings';render()">Settings</button>`
+      :`<button onclick="lockOffice()">🔒 Lock</button>`}
   </div>`;
   if (office==='reports') return sub + reportsView();
   if (office==='goods') return sub + deliveriesView();
@@ -1728,6 +1739,8 @@ function settingsView(){
   const prn = shop.printer;
   return `<div class="setrow"><span>Owner PIN</span>
       <button onclick="changePin()">Change PIN</button></div>
+    <div class="setrow"><span>Supervisor PIN <small style="color:var(--muted)">(no Reports / Settings)</small></span>
+      <button onclick="changeSupPin()">Change PIN</button></div>
     <div class="ticket" style="margin-bottom:8px">
       <b style="font-size:15px">Receipts</b>
       <div class="itemrow" style="margin-top:8px">
@@ -1847,15 +1860,24 @@ function settingsView(){
     <div class="setrow"><span>Full factory reset</span>
       <button style="color:var(--red);border-color:var(--red)" onclick="clearData(true)">Reset</button></div>
     <div class="setrow"><span>Lock back office</span>
-      <button onclick="pinOK=false;goSell();toast('Locked')">Lock now</button></div>
+      <button onclick="lockOffice()">Lock now</button></div>
     <div class="note">Back up weekly and before any phone repair or reset — save the file to
       Google Drive. Data lives only on this device; clearing the app's storage deletes the
       sales record.</div>`;
 }
 function changePin(){ pinAsk('Enter NEW 4-digit PIN', p1 =>
   pinAsk('Repeat new PIN', p2 => {
-    if (p1 === p2) { localStorage.setItem('mc_pin', p1); toast('PIN changed'); }
-    else toast('PINs did not match', true);
+    if (p1 !== p2) { toast('PINs did not match', true); return; }
+    if (p1 === (localStorage.getItem('mc_pin_sup') || '1234')) {
+      toast('That is the supervisor PIN — pick another', true); return; }
+    localStorage.setItem('mc_pin', p1); toast('Owner PIN changed');
+  })); }
+function changeSupPin(){ pinAsk('Enter NEW supervisor PIN', p1 =>
+  pinAsk('Repeat supervisor PIN', p2 => {
+    if (p1 !== p2) { toast('PINs did not match', true); return; }
+    if (p1 === (localStorage.getItem('mc_pin') || '2026')) {
+      toast('That is the owner PIN — pick another', true); return; }
+    localStorage.setItem('mc_pin_sup', p1); toast('Supervisor PIN changed');
   })); }
 function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, suppliers, payments, audit, closes, batches, adjustments}),
   'meat-pos-backup-'+today()+'.json', 'application/json'); }
