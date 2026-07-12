@@ -1,7 +1,15 @@
 # Meat Centre POS — own-build, offline, free
 
 No dependencies, no subscription, no account. All data stays on the device.
-Loyverse-style look: charcoal header, green charge button, colour-coded categories.
+Loyverse-style layout with a modern finish: gradient charcoal header, green charge
+button, colour-coded category tiles, soft shadows and subtle motion throughout.
+
+Every start opens on a **welcome screen** — a greeting for the time of day and one
+rotating word of courage: fear-not scripture (Isaiah 41:10, Joshua 1:9, Psalm 27:1 …),
+perseverance quotes, and Mr Shambare's *"Press on Jake."*, which stays in the rotation
+permanently and comes up more often than anything else. Tap anywhere to skip straight
+to selling; left alone it fades out by itself after ~5 seconds. (The live-view link
+never shows it.)
 
 Files: `index.html` (the whole app) · `sw.js` (offline cache) · `manifest.json` +
 `icon-192.png` / `icon-512.png` (Android install identity).
