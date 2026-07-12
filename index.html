@@ -267,15 +267,18 @@ for (const p of products){                               // migrate older data
   delete p.stock;
   if (p.low == null) p.low = 0;                          // 0 = no restock alert (measured on total on-hand)
 }
-// carcass tier: raw lines from the abattoir (received whole, cut into sellable products)
-if (!localStorage.getItem('mc_rawSeeded')){
+// carcass tier: raw lines from the abattoir (received whole, cut into sellable products).
+// v2: the v1 seed set its flag without persisting the products, so a reload lost the lines
+// for good — reseed wherever raw lines are absent, and write to storage immediately.
+if (localStorage.getItem('mc_rawSeeded') !== '2' && !products.some(p => p.raw)){
   products.push(
     {raw:true, name:'Beef Forequarter', unit:'kg', price:0, cost:0, cat:'Carcass', freezer:0, chiller:0, low:0},
     {raw:true, name:'Beef Hindquarter', unit:'kg', price:0, cost:0, cat:'Carcass', freezer:0, chiller:0, low:0},
     {raw:true, name:'Pork Side',        unit:'kg', price:0, cost:0, cat:'Carcass', freezer:0, chiller:0, low:0},
     {raw:true, name:'Whole Chicken',    unit:'kg', price:0, cost:0, cat:'Carcass', freezer:0, chiller:0, low:0});
-  localStorage.setItem('mc_rawSeeded', '1');
+  localStorage.setItem('mc_products', JSON.stringify(products));   // persist NOW, not on next save()
 }
+localStorage.setItem('mc_rawSeeded', '2');
 let sales = load('mc_sales', []);
 let deliveries = load('mc_deliveries', []);
 let audit = load('mc_audit', []);
