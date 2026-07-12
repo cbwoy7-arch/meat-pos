@@ -445,11 +445,13 @@ function setMode(m){ mode = m;
 }
 function conv(){ const v = parseFloat(document.getElementById('qty').value), c = document.getElementById('conv');
   if (!cur || !(v>0)) { c.textContent = ''; return; }
+  if (mode==='usd' && !(cur.price>0)) { c.textContent = 'Set a price for this item first'; return; }
   c.textContent = mode==='kg' ? '= '+fmt(round2(v*cur.price))
                               : '= '+(round3(v/cur.price)).toFixed(3)+' '+cur.unit;
 }
 function addLine(){ const v = parseFloat(document.getElementById('qty').value);
   if (!(v>0)) { toast('Enter a quantity', true); return; }
+  if (mode==='usd' && !(cur.price>0)) { toast('This item has no price — set it in Items first', true); return; }
   const kg = mode==='kg' ? round3(v) : round3(v/cur.price);
   const amt = mode==='kg' ? round2(v*cur.price) : round2(v);
   const avail = chillerAvail(cur);
@@ -903,16 +905,20 @@ function copySummary(){ const a = agg();
   if (navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast('Summary copied'), ()=>toast(txt));
   else toast('Copy not available on this device', true);
 }
-function csv(){ const days = {};
+function csv(){ const rows = {};   // keyed by JSON.stringify([date,name]) so a comma/pipe in a name can't corrupt it
+  const order = [];
   for (const s of rangeSales()) if (!s.void)
-    for (const l of s.lines){ const k = s.date+'|'+l.name;
-      days[k] = days[k] || {kg:0, amt:0, cogs:0};
-      days[k].kg += l.kg; days[k].amt += l.amt; days[k].cogs += lineCost(l); }
-  const rows = [['Date','Product','POS sold kg','POS takings $','Cost of sold $','Profit $'],
-    ...Object.keys(days).sort().map(k => { const [d,n] = k.split('|');
-      return [d, n, days[k].kg.toFixed(3), days[k].amt.toFixed(2),
-              days[k].cogs.toFixed(2), (days[k].amt - days[k].cogs).toFixed(2)]; })];
-  dl(rows.map(r=>r.join(',')).join('\n'), 'pos-sales-'+repFrom+'-to-'+repTo+'.csv', 'text/csv');
+    for (const l of s.lines){
+      const key = JSON.stringify([s.date, l.name]);
+      let rec = rows[key];
+      if (!rec){ rec = {date:s.date, name:l.name, kg:0, amt:0, cogs:0}; rows[key] = rec; order.push(rec); }
+      rec.kg += l.kg; rec.amt += l.amt; rec.cogs += lineCost(l); }
+  order.sort((a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const q = v => /[",\n]/.test(String(v)) ? '"'+String(v).replace(/"/g,'""')+'"' : String(v);
+  const out = [['Date','Product','POS sold kg','POS takings $','Cost of sold $','Profit $'],
+    ...order.map(r => [r.date, r.name, r.kg.toFixed(3), r.amt.toFixed(2),
+              r.cogs.toFixed(2), (r.amt - r.cogs).toFixed(2)])];
+  dl(out.map(r=>r.map(q).join(',')).join('\n'), 'pos-sales-'+repFrom+'-to-'+repTo+'.csv', 'text/csv');
 }
 // ---------------- CUTTING / BREAK DOWN (batch yield log) ----------------
 function cutView(){
