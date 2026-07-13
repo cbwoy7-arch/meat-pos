@@ -1,5 +1,5 @@
-const CACHE = 'meat-pos-v34';
-const FILES = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
+const CACHE = 'meat-pos-v35';
+const FILES = ['./', './index.html', './manifest.json', './logo.jpg', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
   // cache:'reload' skips the HTTP cache so a new SW never installs stale files

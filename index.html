@@ -18,7 +18,7 @@
   button:active { transform:scale(.96); }
   body { background:var(--bg); color:var(--text); height:100dvh; display:flex;
          flex-direction:column; overflow:hidden; }
-  header { background:linear-gradient(120deg, var(--dark) 25%, var(--dark2)); color:#fff;
+  header { background:linear-gradient(120deg, var(--dark) 30%, #422a2b); color:#fff;
            padding:13px 16px; display:flex; justify-content:space-between; align-items:center;
            flex-shrink:0; box-shadow:0 1px 10px rgba(18,30,38,.28); position:relative; z-index:2; }
   header h1 { font-size:17px; font-weight:600; letter-spacing:.2px; display:flex; align-items:center; gap:8px; }
@@ -193,22 +193,24 @@
            z-index:50; max-width:88%; text-align:center; box-shadow:0 6px 20px rgba(18,30,38,.28);
            animation:drop .25s cubic-bezier(.2,.8,.3,1); }
   @keyframes drop { from { transform:translate(-50%,-16px); opacity:0; } }
-  /* welcome splash */
+  /* welcome splash — Jack's Meat Centre brand: cream paper, maroon, bronze */
   #splash { position:fixed; inset:0; z-index:60; display:flex; flex-direction:column;
             align-items:center; justify-content:center; text-align:center; padding:32px 28px;
-            color:#fff; cursor:pointer; background:#1e2a31; transition:opacity .45s ease;
-            background-image:radial-gradient(circle at 50% -12%, rgba(124,179,66,.38), transparent 62%),
-                             linear-gradient(165deg, #1e2a31, #26343d); }
+            cursor:pointer; background:#f0ebe4; transition:opacity .45s ease;
+            background-image:radial-gradient(circle at 50% -12%, rgba(122,43,36,.08), transparent 60%); }
   #splash.bye { opacity:0; pointer-events:none; }
-  #splash .sp-logo { font-size:46px; margin-bottom:12px; animation:pop .55s cubic-bezier(.5,1.6,.4,1); }
-  #splash h1 { font-size:26px; font-weight:700; letter-spacing:.3px; }
-  #splash .sp-date { font-size:14px; opacity:.6; margin:7px 0 36px; }
-  #splash blockquote { font-size:19px; line-height:1.55; max-width:340px; border:0;
+  #splash .sp-logo { width:min(78vw, 400px); height:auto; margin-bottom:14px; border-radius:18px;
+                     box-shadow:0 10px 34px rgba(60,35,25,.16), 0 2px 8px rgba(60,35,25,.10);
+                     animation:pop .55s cubic-bezier(.5,1.6,.4,1); }
+  #splash h1 { font-size:24px; font-weight:700; letter-spacing:.4px; color:#7a2b24; }
+  #splash .sp-date { font-size:14px; color:#22303a; opacity:.55; margin:7px 0 30px; }
+  #splash blockquote { font-size:19px; line-height:1.55; max-width:340px; border:0; color:#5c2620;
                        animation:rise .5s ease-out .15s backwards; }
-  #splash .sp-ref { margin-top:14px; font-size:14px; color:#abd37e; letter-spacing:.4px;
+  #splash .sp-ref { margin-top:14px; font-size:14px; color:#8a6d2f; letter-spacing:.4px;
                     animation:rise .5s ease-out .28s backwards; }
   #splash .sp-skip { position:absolute; bottom:max(26px, env(safe-area-inset-bottom)); left:0; right:0;
-                     font-size:12px; opacity:.45; letter-spacing:.6px; animation:pulseskip 2.6s ease infinite; }
+                     font-size:12px; color:#22303a; opacity:.45; letter-spacing:.6px;
+                     animation:pulseskip 2.6s ease infinite; }
   @keyframes pulseskip { 50% { opacity:.18; } }
   /* tablet (portrait till): use the width without stretching the phone layout */
   @media (min-width:700px){
@@ -225,7 +227,8 @@
     .pinpad { grid-template-columns:repeat(3,86px); gap:14px; }
     .pinpad button { width:86px; height:76px; border-radius:20px; }
     #splash blockquote { max-width:460px; font-size:22px; }
-    #splash h1 { font-size:30px; }
+    #splash h1 { font-size:28px; }
+    #splash .sp-logo { width:min(58vw, 450px); }
   }
 </style>
 </head>
@@ -310,7 +313,7 @@
 </div>
 
 <div id="splash" onclick="hideSplash()">
-  <div class="sp-logo">🥩</div>
+  <img class="sp-logo" src="logo.jpg" alt="Jack's Meat Centre">
   <h1 id="sp-greet"></h1>
   <div class="sp-date" id="sp-date"></div>
   <blockquote id="sp-quote"></blockquote>
@@ -2272,9 +2275,10 @@ const WELCOME = [
 ];
 function showSplash(){
   const h = new Date().getHours();
-  const greet = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
-  document.getElementById('sp-greet').textContent = shop.name || 'Meat Centre';
-  document.getElementById('sp-date').textContent = greet + ' · ' +
+  // the logo carries the shop name, so the headline is the greeting itself
+  document.getElementById('sp-greet').textContent =
+    h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  document.getElementById('sp-date').textContent =
     new Date().toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
   const last = +(localStorage.getItem('mc_lastQuote') ?? -1);
   let i; do { i = Math.floor(Math.random()*WELCOME.length); } while (i === last);
