@@ -394,6 +394,7 @@ let debSel = null, debPayDraft = null, debEditDraft = null, acctPick = null;   /
 let cashbook = load('mc_cashbook', []);             // owner's cash book: collect-and-split + envelope spends
 let envs = load('mc_envs', {});                     // running envelope balances {name: $} — survive pruning
 let cbSel = null, cbDraft = null, cbSpendDraft = null;   // cash book UI state
+let setSec = null;                                  // settings: which section card is open (null = menu)
 let shop = load('mc_shop', { name:'Meat Centre', line2:'', footer:'Thank you, come again!',
                              printer:'off', auto:false, tolKg:0.2, tolTill:0.02 });
 if (shop.tolKg == null) shop.tolKg = 0.2;      // count tolerance per line
@@ -491,18 +492,18 @@ function render(){
 let navStack = [], navLast = null, navRestoring = false;
 function navSnapshot(){ return {office, supSel, supPayDraft, supEditDraft, cutDraft, issueDraft,
   ftakeDraft, ftakeLast, closeStep, viewTs, openStep, openViewTs, repSec, repAll,
-  debSel, debPayDraft, debEditDraft, cbSel, cbDraft, cbSpendDraft}; }
+  debSel, debPayDraft, debEditDraft, cbSel, cbDraft, cbSpendDraft, setSec}; }
 function navKey(s){ return JSON.stringify([s.office, s.supSel, !!s.supPayDraft, !!s.supEditDraft,
   !!s.cutDraft, !!s.issueDraft, !!s.ftakeDraft, !!s.ftakeLast, s.closeStep, s.viewTs,
   s.openStep, s.openViewTs, s.repSec, !!s.repAll, s.debSel, !!s.debPayDraft, !!s.debEditDraft,
-  s.cbSel, !!s.cbDraft, !!s.cbSpendDraft]); }
+  s.cbSel, !!s.cbDraft, !!s.cbSpendDraft, s.setSec]); }
 function officeBack(){ const s = navStack.pop(); if (!s) return; navRestoring = true;
   office = s.office; supSel = s.supSel; supPayDraft = s.supPayDraft; supEditDraft = s.supEditDraft;
   cutDraft = s.cutDraft; issueDraft = s.issueDraft; ftakeDraft = s.ftakeDraft; ftakeLast = s.ftakeLast;
   closeStep = s.closeStep; viewTs = s.viewTs; openStep = s.openStep; openViewTs = s.openViewTs;
   repSec = s.repSec; repAll = s.repAll;
   debSel = s.debSel; debPayDraft = s.debPayDraft; debEditDraft = s.debEditDraft;
-  cbSel = s.cbSel; cbDraft = s.cbDraft; cbSpendDraft = s.cbSpendDraft; render(); }
+  cbSel = s.cbSel; cbDraft = s.cbDraft; cbSpendDraft = s.cbSpendDraft; setSec = s.setSec; render(); }
 function tbar(){ const b = document.getElementById('tbar');
   const total = ticket.reduce((s,l)=>s+l.amt,0);
   const show = tab==='sell' && view!=='charge' && view!=='acct' && ticket.length;
@@ -867,7 +868,7 @@ function officeView(){
     ${role==='owner'?`<button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>`:''}
     <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
     ${role==='owner'
-      ?`<button class="${office==='settings'||office==='audit'?'on':''}" onclick="office='settings';render()">Settings</button>`
+      ?`<button class="${office==='settings'||office==='audit'?'on':''}" onclick="office='settings';setSec=null;render()">Settings</button>`
       :`<button onclick="lockOffice()">🔒 Lock</button>`}
   </div>`;
   if (office==='reports') return sub + reportsView();
@@ -2554,12 +2555,32 @@ function delItem(i){ ask('Delete "'+products[i].name+'"? Past sales of it stay i
   logAudit('item-deleted', products[i].name+' (stock at deletion: '+onHand(products[i]).toFixed(3)+')');
   products.splice(i,1); save(); render(); }); }
 function settingsView(){
+  // a menu of cards, each opening one tidy section — instead of one endless scroll
+  const MENU = [
+    ['shop',     '🧾', 'Shop &amp; receipts',  'name on the till slip, printer setup, auto-print'],
+    ['security', '🔐', 'Security',             'owner &amp; supervisor PINs, audit log'],
+    ['numbers',  '📐', 'Business numbers',     'close tolerances, overheads &amp; loan, expense categories'],
+    ['data',     '☁️', 'Data &amp; backups',   'live view, cloud backup, file backup &amp; restore'],
+    ['month',    '🗓️', 'Month-end',            'download the month pack, clear old records'],
+  ];
+  if (!setSec)
+    return MENU.map(([k,e,t,d]) => `<div class="salecard" onclick="setSec='${k}';render()">
+        <div class="top"><span style="font-size:16px">${e} ${t}</span><span style="color:#999;font-size:18px">›</span></div>
+        <div class="lines">${d}</div>
+      </div>`).join('') +
+      `<div class="setrow"><span>Lock back office</span>
+        <button onclick="lockOffice()">Lock now</button></div>
+      <div class="note">Data lives only on this device; the weekly cloud backup and the month packs
+        on Drive are the safety net. Clearing the app's storage deletes the sales record.</div>`;
+  const cur = MENU.find(x => x[0] === setSec) || MENU[0];
+  return `<div class="chips"><button onclick="setSec=null;render()">‹ All settings</button></div>
+    <div style="font-size:16px;font-weight:bold;margin:2px 2px 8px">${cur[1]} ${cur[2]}</div>` +
+    (setSec==='shop' ? setShopSec() : setSec==='security' ? setSecuritySec() :
+     setSec==='numbers' ? setNumbersSec() : setSec==='data' ? setDataSec() : setMonthSec());
+}
+function setShopSec(){
   const prn = shop.printer;
-  return `<div class="setrow"><span>Owner PIN</span>
-      <button onclick="changePin()">Change PIN</button></div>
-    <div class="setrow"><span>Supervisor PIN <small style="color:var(--muted)">(no Reports / Settings)</small></span>
-      <button onclick="changeSupPin()">Change PIN</button></div>
-    <div class="ticket" style="margin-bottom:8px">
+  return `<div class="ticket" style="margin-bottom:8px">
       <b style="font-size:15px">Receipts</b>
       <div class="itemrow" style="margin-top:8px">
         <input style="flex:1" value="${esc(shop.name)}" placeholder="Shop name"
@@ -2597,8 +2618,21 @@ function settingsView(){
         <input type="checkbox" ${shop.auto?'checked':''}
                onchange="shop.auto=this.checked;saveShop()">
         Print automatically after every sale</label>
-    </div>
-    <div class="ticket" style="margin-bottom:8px">
+    </div>`;
+}
+function setSecuritySec(){
+  return `<div class="setrow"><span>Owner PIN</span>
+      <button onclick="changePin()">Change PIN</button></div>
+    <div class="setrow"><span>Supervisor PIN <small style="color:var(--muted)">(runs the day)</small></span>
+      <button onclick="changeSupPin()">Change PIN</button></div>
+    <div class="setrow"><span>Audit log <small style="color:var(--muted)">(append-only)</small></span>
+      <button onclick="office='audit';render()">View</button></div>
+    <div class="note">The owner PIN opens everything. The supervisor PIN runs the day but cannot
+      see Reports, the Cash Book or Settings. Change both away from the defaults, and check the
+      audit log now and then — every action in the shop is written there and cannot be edited.</div>`;
+}
+function setNumbersSec(){
+  return `<div class="ticket" style="margin-bottom:8px">
       <b style="font-size:15px">Daily Close tolerances</b>
       <div class="itemrow lab" style="margin-top:8px">
         <span style="flex:1">count tolerance (kg/line)</span><span style="flex:1">till tolerance (%)</span>
@@ -2645,21 +2679,10 @@ function settingsView(){
       <div class="note">Every cash pay-out at the Close and every envelope spend picks one of these —
         that's what groups the expenses for Reports and for the accountant's month pack. Keep the
         list short; renaming here only affects new entries, old ones keep the name they were saved with.</div>
-    </div>
-    <div class="ticket" style="margin-bottom:8px">
-      <b style="font-size:15px">Month-end archive</b>
-      <div class="itemrow" style="margin-top:8px;margin-bottom:0">
-        <input id="arc-m" type="month" style="flex:1" value="${today().slice(0,7)}">
-      </div>
-      <button class="bigbtn" onclick="archiveMonth()">DOWNLOAD MONTH PACK</button>
-      <button class="bigbtn grey" onclick="pruneOld()">Clear records older than selected month</button>
-      <div class="note">Month-end routine: download the pack (9 CSVs + 1 JSON — allow multiple
-        downloads when Chrome asks) and save all ten files to Google Drive. That folder is the
-        VAT / tax record base for the PBC. Then clear old months to keep the phone light —
-        products, current stock and the audit log are never cleared, and the newest close is
-        always kept.</div>
-    </div>
-    <div class="ticket" style="margin-bottom:8px">
+    </div>`;
+}
+function setDataSec(){
+  return `<div class="ticket" style="margin-bottom:8px">
       <b style="font-size:15px">Live view — watch from your own phone</b>
       <div class="note" style="margin-top:6px">See the shop from your own phone without touching the till:
         a <b>LIVE</b> tab with today’s sales as they happen, and a <b>REPORTS</b> tab — the full
@@ -2694,21 +2717,32 @@ function settingsView(){
       : `<div class="note" style="margin-top:6px">Needs the Live view relay above — paste the relay URL
           there first, and weekly cloud backups switch on by themselves.</div>`}
     </div>
-    <div class="setrow"><span>Audit log</span>
-      <button onclick="office='audit';render()">View</button></div>
-    <div class="setrow"><span>Backup all data</span>
+    <div class="setrow"><span>Backup all data <small style="color:var(--muted)">(one file)</small></span>
       <button onclick="backup()">Download</button></div>
     <div class="setrow"><span>Restore from backup</span>
       <button onclick="restore()">Choose file</button></div>
-    <div class="setrow"><span>Clear test data (keep products &amp; settings)</span>
+    <div class="note">The cloud backup runs weekly by itself; still download a file backup
+      before any phone repair or reset and save it to Google Drive.</div>
+    <div class="note" style="color:var(--red);margin:10px 0 6px"><b>Danger zone</b> — these delete records for good.</div>
+    <div class="setrow"><span>Clear test data <small style="color:var(--muted)">(keeps products &amp; settings)</small></span>
       <button onclick="clearData(false)">Clear</button></div>
     <div class="setrow"><span>Full factory reset</span>
-      <button style="color:var(--red);border-color:var(--red)" onclick="clearData(true)">Reset</button></div>
-    <div class="setrow"><span>Lock back office</span>
-      <button onclick="lockOffice()">Lock now</button></div>
-    <div class="note">The cloud backup above runs weekly by itself; still download a file backup
-      before any phone repair or reset and save it to Google Drive. Data lives only on this
-      device; clearing the app's storage deletes the sales record.</div>`;
+      <button style="color:var(--red);border-color:var(--red)" onclick="clearData(true)">Reset</button></div>`;
+}
+function setMonthSec(){
+  return `<div class="ticket" style="margin-bottom:8px">
+      <b style="font-size:15px">Month-end archive</b>
+      <div class="itemrow" style="margin-top:8px;margin-bottom:0">
+        <input id="arc-m" type="month" style="flex:1" value="${today().slice(0,7)}">
+      </div>
+      <button class="bigbtn" onclick="archiveMonth()">DOWNLOAD MONTH PACK</button>
+      <button class="bigbtn grey" onclick="pruneOld()">Clear records older than selected month</button>
+      <div class="note">Month-end routine: download the pack (9 CSVs + 1 JSON — allow multiple
+        downloads when Chrome asks) and save all ten files to Google Drive. That folder is the
+        VAT / tax record base for the PBC. Then clear old months to keep the phone light —
+        products, current stock and the audit log are never cleared, and the newest close is
+        always kept.</div>
+    </div>`;
 }
 function changePin(){ pinAsk('Enter NEW 4-digit PIN', p1 =>
   pinAsk('Repeat new PIN', p2 => {
