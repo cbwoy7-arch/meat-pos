@@ -858,19 +858,18 @@ function closeConfirm(yes){ document.getElementById('confirm').classList.remove(
 function officeView(){
   if (office !== 'items') itemsSnap = null;
   if (!canSee(office)) office = 'goods';        // supervisor can't land on owner-only screens
-  const sub = `<div class="subnav">
-    <button class="${office==='open'?'on':''}" onclick="office='open';render()">Open Day${openedToday()?'':' ⚠'}</button>
-    <button class="${['goods','suppliers'].includes(office)?'on':''}" onclick="office='goods';render()">Goods In</button>
-    <button class="${['stock','cut','issue','ftake'].includes(office)?'on':''}" onclick="office='stock';ftakeLast=null;render()">Stock${lowStock().length?' ⚠':''}</button>
-    <button class="${office==='close'?'on':''}" onclick="office='close';render()">Close</button>
-    <button class="${office==='debtors'?'on':''}" onclick="office='debtors';debSel=null;debPayDraft=null;debEditDraft=null;render()">Debtors${debtTotal()>0.001?' ⚠':''}</button>
-    ${role==='owner'?`<button class="${office==='cashbook'?'on':''}" onclick="office='cashbook';cbSel=null;cbDraft=null;cbSpendDraft=null;render()">Cash Book${cashPending().length?' ⚠':''}</button>`:''}
-    ${role==='owner'?`<button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>`:''}
-    <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
+  // two-level nav: workflow groups on top, the group's screens as pills underneath
+  const grp = officeGroup(office);
+  const dayWarn = (!openedToday() || (role==='owner' && cashPending().length)) ? ' ⚠' : '';
+  const sub = `<div class="subnav" style="margin-bottom:6px">
+    <button class="${grp==='day'?'on':''}" onclick="goGroup('day')">☀️ Day${dayWarn}</button>
+    <button class="${grp==='stock'?'on':''}" onclick="goGroup('stock')">📦 Stock${lowStock().length?' ⚠':''}</button>
+    <button class="${grp==='accounts'?'on':''}" onclick="goGroup('accounts')">👥 Accounts${debtTotal()>0.001?' ⚠':''}</button>
+    ${role==='owner'?`<button class="${grp==='reports'?'on':''}" onclick="goGroup('reports')">📊 Reports</button>`:''}
     ${role==='owner'
-      ?`<button class="${office==='settings'||office==='audit'?'on':''}" onclick="office='settings';setSec=null;render()">Settings</button>`
+      ?`<button class="${grp==='settings'?'on':''}" onclick="goGroup('settings')">⚙️ Settings</button>`
       :`<button onclick="lockOffice()">🔒 Lock</button>`}
-  </div>`;
+  </div>` + groupPills(grp);
   if (office==='reports') return sub + reportsView();
   if (office==='goods') return sub + deliveriesView();
   if (office==='suppliers') return sub + suppliersView();
@@ -885,6 +884,52 @@ function officeView(){
   if (office==='items') return sub + itemsAdmin();
   if (office==='audit') return sub + auditView();
   return sub + settingsView();
+}
+// screens grouped by workflow: Day = the daily rituals in time order, Stock = goods through
+// the shop, Accounts = the two credit books. The group is derived from the open screen, so
+// every existing cross-link (e.g. sell screen → Issue stock) still lands in the right place.
+function officeGroup(o){
+  if (['open','close','cashbook'].includes(o)) return 'day';
+  if (['goods','stock','cut','issue','ftake','items'].includes(o)) return 'stock';
+  if (['debtors','suppliers'].includes(o)) return 'accounts';
+  return o === 'reports' ? 'reports' : 'settings';
+}
+function closedToday(){ return closes.length > 0 && closes[closes.length-1].date === today(); }
+// tapping DAY meets you where the day is: open it, close it, or collect the cash
+function dayLand(){
+  if (!openedToday()) return 'open';
+  if (role === 'owner' && closedToday() && cashPending().length) return 'cashbook';
+  return 'close';
+}
+function goGroup(g){
+  if (g === 'day'){ office = dayLand();
+    if (office === 'cashbook'){ cbSel = null; cbDraft = null; cbSpendDraft = null; } }
+  else if (g === 'stock'){ office = 'goods'; }
+  else if (g === 'accounts'){ office = 'debtors'; debSel = null; debPayDraft = null; debEditDraft = null; }
+  else if (g === 'reports'){ office = 'reports'; }
+  else { office = 'settings'; setSec = null; }
+  render();
+}
+function groupPills(grp){
+  const pill = (on, click, label) => `<button class="${on?'on':''}" onclick="${click}">${label}</button>`;
+  let pills = '';
+  if (grp === 'day')
+    pills = pill(office==='open', "office='open';render()", 'Open Day'+(openedToday()?'':' ⚠'))
+      + pill(office==='close', "office='close';render()", 'Close')
+      + (role==='owner' ? pill(office==='cashbook',
+          "office='cashbook';cbSel=null;cbDraft=null;cbSpendDraft=null;render()",
+          'Cash Book'+(cashPending().length?' ⚠':'')) : '');
+  else if (grp === 'stock')
+    pills = pill(office==='goods', "office='goods';render()", 'Goods In')
+      + pill(['stock','cut','issue','ftake'].includes(office), "office='stock';ftakeLast=null;render()",
+          'Stock'+(lowStock().length?' ⚠':''))
+      + pill(office==='items', "office='items';render()", 'Items');
+  else if (grp === 'accounts')
+    pills = pill(office==='debtors', "office='debtors';debSel=null;debPayDraft=null;debEditDraft=null;render()",
+          'Debtors'+(debtTotal()>0.001?' ⚠':''))
+      + pill(office==='suppliers', "office='suppliers';supSel=null;supPayDraft=null;supEditDraft=null;render()",
+          'Suppliers');
+  return pills ? `<div class="pillrow">${pills}</div>` : '';
 }
 function rangeSales(){ return sales.filter(s => s.date >= repFrom && s.date <= repTo); }
 function costOf(name){ const p = products.find(x => x.name === name); return p ? p.cost||0 : 0; }
