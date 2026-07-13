@@ -4,7 +4,7 @@ No dependencies, no subscription, no account. All data stays on the device.
 Loyverse-style layout with a modern finish: gradient charcoal header, green charge
 button, colour-coded category tiles, soft shadows and subtle motion throughout.
 
-Every start opens on a **welcome screen** — the shop name (from Settings → Receipts),
+Every start opens on a **welcome screen** — the shop name (from Settings → Shop & receipts),
 a greeting for the time of day, and one rotating word of courage: fear-not scripture
 (Isaiah 41:10, Joshua 1:9, Psalm 27:1 …) and perseverance quotes. Tap anywhere to skip
 straight to selling; left alone it fades out by itself after ~5 seconds. (The live-view
@@ -41,13 +41,29 @@ so everything works inside an Android app shell.
 There are **two accounts**, told apart by the PIN entered:
 
 - **Owner** (default PIN **2026**) — full back office, including Reports and Settings.
-- **Shop supervisor** (default PIN **1234**) — day-to-day running only: Goods In, Stock,
-  Close and Items, plus a **🔒 Lock** button. **Reports, the Cash Book and Settings are
-  hidden**, so the supervisor can trade, receive stock and cash up without seeing profit
-  figures or the owner's cash position, and can't change PINs, printer/receipt setup or
-  reset the data (all Settings-only actions).
+- **Shop supervisor** (default PIN **1234**) — day-to-day running only: the Day, Stock
+  and Accounts groups, plus a **🔒 Lock** button. **Reports, the Cash Book and Settings
+  are hidden**, so the supervisor can trade, receive stock and cash up without seeing
+  profit figures or the owner's cash position, and can't change PINs, printer/receipt
+  setup or reset the data (all Settings-only actions).
 
-Change both PINs in **Settings** on day one (owner only). The two PINs can't be set the same.
+Change both PINs in **Settings → Security** on day one (owner only). The two PINs can't
+be set the same.
+
+The back office is organised as **five workflow groups**, each with a light pill row for
+the screens inside it:
+
+- **☀️ Day** — the daily rituals in time order: **Open Day → Close → Cash Book** (owner).
+  Tapping the group lands on whichever ritual is pending: day not opened → Open Day;
+  opened → Close; closed with cash awaiting the owner → Cash Book.
+- **📦 Stock** — goods flowing through the shop: **Goods In**, **Stock** (issue to
+  chiller, cutting, freezer stock-take) and **Items** (the product catalogue).
+- **👥 Accounts** — the two credit books, mirror images: **Debtors** (owed to you) and
+  **Suppliers** (owed by you).
+- **📊 Reports** (owner) and **⚙️ Settings** (owner).
+
+Warning badges (⚠) roll up to the group buttons — day not opened or cash uncollected,
+low stock, outstanding debtors — so nothing pending is buried a level down.
 
 - **Reports** — any date range: total / cash / EcoCash / swipe split, plus **restock
   value** (what the goods sold cost to replace), **gross profit** and **margin %**;
@@ -56,7 +72,8 @@ Change both PINs in **Settings** on day one (owner only). The two PINs can't be 
   summary; **CSV** exports per-day per-product figures including cost and profit.
   Then the **Day P&L**: gross profit less a daily share of the monthly overheads
   (set in Settings, absorbed per working day — closed days still carry overhead),
-  less **cash expenses** (money paid out of the till, captured at the close) and
+  less **cash expenses** (money paid out of the till, captured at the close — with a
+  **by-category table** underneath, built from the category picked on every pay-out) and
   **write-offs / waste at cost** (spoilage and downward stock corrections) =
   **net operating profit**, plus the **break-even sales/day** figure and, while the
   loan runs, an **"after loan"** line (financing shown separately, never mixed into
@@ -142,7 +159,8 @@ Change both PINs in **Settings** on day one (owner only). The two PINs can't be 
   **Loan** at their daily share from Settings, and whatever remains goes to **Profit set
   aside** automatically. The suggested split feeds the envelopes in that order until the
   cash runs out; every figure can be changed before the record locks. Envelopes keep
-  **running balances** until spent out (spends need a what-for and are audited), and a
+  **running balances** until spent out (spends need a **category** and a what-for, and
+  are audited), and a
   supplier payment can be drawn **straight from the Restock envelope** with a tick on the
   payment form. The balances survive month-end pruning, the history joins the month pack
   as its own CSV, and Reports → Controls shows the profit-set-aside figure at a glance.
@@ -152,7 +170,9 @@ Change both PINs in **Settings** on day one (owner only). The two PINs can't be 
   then **count the money** (till cash — with a float declared at Open Day the app says
   "count everything, float included" and expects float + takings; without one, count
   excluding the float as before — plus EcoCash and swipe) and list any **cash paid out of the till** that day (gas, bags,
-  casual labour — each needs a reason). Only after saving does the app reveal the
+  casual labour — each needs a **category** from the fixed list plus a what-for; supplier
+  payments made from the till are added and tagged **Stock / supplier** automatically).
+  Only after saving does the app reveal the
   variances: per-line count-vs-expected in kg and $, and the till gap per payment
   method — with cash pay-outs added back so a legitimate expense never reads as a
   shortage, and captured as an expense in the Day P&L. The record locks
@@ -164,20 +184,32 @@ Change both PINs in **Settings** on day one (owner only). The two PINs can't be 
   (alert level; 0 = no alert). **Stock is read-only here** — deliveries add to it via
   Goods In; corrections go through the stock button, which demands a reason and logs the
   change. Price and cost edits are logged to the audit trail when you press SAVE.
-- **Settings** — change PIN, receipt header/footer + printer setup, **Daily Close
-  tolerances**, **monthly overheads & loan** (editable list ÷ working days = the
-  daily rate; prefilled from the business plan; delete the equipment-hire line in
-  month 13, zero the loan at month 12), the **month-end archive**, the **weekly cloud
-  backup** (status, back-up-now, restore from cloud), **audit log viewer**,
-  backup/restore all data (JSON), lock the office.
+- **Settings** — a menu of five cards, each its own tidy screen (Lock stays on the
+  front page):
+  - **🧾 Shop & receipts** — shop name / address / footer on the till slip, printer
+    setup, auto-print after every sale.
+  - **🔐 Security** — owner and supervisor PINs, the audit log viewer.
+  - **📐 Business numbers** — **Daily Close tolerances**, **monthly overheads & loan**
+    (editable list ÷ working days = the daily rate; prefilled from the business plan;
+    delete the equipment-hire line in month 13, zero the loan at month 12), and the
+    **expense categories** list (seeded with Stock / supplier, Fuel & gas, Packaging,
+    Casual labour, Wages, Transport, Repairs & maintenance, Cleaning, Rent & utilities,
+    Loan & bank, Other — every cash pay-out and envelope spend picks one, which is what
+    the accountant maps onto a chart of accounts later).
+  - **☁️ Data & backups** — the live-view relay, the **weekly cloud backup** (status,
+    back-up-now, restore from cloud), file backup/restore (JSON), and a marked
+    **danger zone** at the bottom for clear-test-data and factory reset.
+  - **🗓️ Month-end** — the month pack download and old-record pruning.
 
 ## Month-end archive (the VAT / tax record base)
 
-Settings → Month-end archive → pick the month → **DOWNLOAD MONTH PACK**: eight CSVs
+Settings → Month-end → pick the month → **DOWNLOAD MONTH PACK**: nine CSVs
 (sales line-by-line, deliveries, supplier payments, debtor payments, cash book
 collections and spends, cutting batches, daily closes incl. cash paid out and debtor
-money in, and stock adjustments / write-offs) plus one JSON of everything. Allow multiple
-downloads when Chrome asks, and save all nine files to a
+money in, stock adjustments / write-offs, and an **expenses ledger** — every till
+pay-out and envelope spend with its category, ready to pivot onto a chart of accounts)
+plus one JSON of everything. Allow multiple
+downloads when Chrome asks, and save all ten files to a
 Google Drive folder per month — that folder is the PBC's books and the VAT working
 base when registration lands (~Feb–Mar 2027). Then **Clear records older than the
 selected month** to keep the phone light: products, current stock and the audit log
@@ -187,7 +219,7 @@ are never touched, and the newest close is always kept.
 
 Every sensitive action writes an append-only entry the app itself cannot edit or delete:
 deliveries, payments to suppliers, stock adjustments (with the reason), cash paid out
-of the till, price and cost changes, voids, and backup restores. Settings → Audit log shows the last 100. If a number
+of the till, price and cost changes, voids, and backup restores. Settings → Security → Audit log shows the last 100. If a number
 looks wrong, the trail says who-did-what-when — that is the difference between a mistake
 and a mystery.
 
@@ -196,9 +228,9 @@ and a mystery.
 Every sale card in Reports has a **PRINT** button (reprints work too), and the green
 confirmation screen has **PRINT RECEIPT**. Receipts are 58 mm / 32-column format with
 the shop name, date/time, sale number, every line (kg × price), total and payment
-method — set the header and footer text in Settings → Receipts.
+method — set the header and footer text in Settings → Shop & receipts.
 
-Three printer modes in Settings → Receipts:
+Three printer modes in Settings → Shop & receipts:
 
 - **No printer (default)** — the print button opens the Android share sheet with the
   receipt text; send it to WhatsApp or any printer app.
@@ -256,7 +288,7 @@ version in the background, the second one runs it.
   `…/backup`). Settings shows the last backup date, with **BACK UP NOW** and **Restore
   from cloud** buttons — a lost or dead tablet gets everything back on a new device from
   just the relay URL.
-- Still **download a file backup** (Settings → Backup) before any phone repair/reset;
+- Still **download a file backup** (Settings → Data & backups) before any phone repair/reset;
   save the file to Google Drive. Restore reloads it onto any device.
 - One live till by design — devices don't sync. **This app is the master record** — the
   Excel workbook is retired, which makes the weekly backup non-negotiable.

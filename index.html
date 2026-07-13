@@ -394,6 +394,7 @@ let debSel = null, debPayDraft = null, debEditDraft = null, acctPick = null;   /
 let cashbook = load('mc_cashbook', []);             // owner's cash book: collect-and-split + envelope spends
 let envs = load('mc_envs', {});                     // running envelope balances {name: $} — survive pruning
 let cbSel = null, cbDraft = null, cbSpendDraft = null;   // cash book UI state
+let setSec = null;                                  // settings: which section card is open (null = menu)
 let shop = load('mc_shop', { name:'Meat Centre', line2:'', footer:'Thank you, come again!',
                              printer:'off', auto:false, tolKg:0.2, tolTill:0.02 });
 if (shop.tolKg == null) shop.tolKg = 0.2;      // count tolerance per line
@@ -405,6 +406,10 @@ if (!Array.isArray(shop.ovh)) shop.ovh = [     // monthly overheads (from the Vi
 if (shop.wdays == null) shop.wdays = 30;       // working days per month (overhead divisor)
 if (shop.loan == null) shop.loan = 580.18;     // loan repayment $/mo — financing, shown separately
 if (shop.sync == null) shop.sync = '';         // live-view relay URL (empty = feature off)
+if (!Array.isArray(shop.exCats) || !shop.exCats.length) shop.exCats = [  // expense categories —
+  'Stock / supplier','Fuel & gas','Packaging','Casual labour','Wages',    // every cash pay-out and
+  'Transport','Repairs & maintenance','Cleaning','Rent & utilities',      // envelope spend carries one,
+  'Loan & bank','Other'];                                                 // so the accountant can map them
 let lastSaleId = null;
 const viewMode = new URLSearchParams(location.search).has('view');   // ?view = read-only live dashboard
 function saveShop(){ localStorage.setItem('mc_shop', JSON.stringify(shop)); }
@@ -487,18 +492,18 @@ function render(){
 let navStack = [], navLast = null, navRestoring = false;
 function navSnapshot(){ return {office, supSel, supPayDraft, supEditDraft, cutDraft, issueDraft,
   ftakeDraft, ftakeLast, closeStep, viewTs, openStep, openViewTs, repSec, repAll,
-  debSel, debPayDraft, debEditDraft, cbSel, cbDraft, cbSpendDraft}; }
+  debSel, debPayDraft, debEditDraft, cbSel, cbDraft, cbSpendDraft, setSec}; }
 function navKey(s){ return JSON.stringify([s.office, s.supSel, !!s.supPayDraft, !!s.supEditDraft,
   !!s.cutDraft, !!s.issueDraft, !!s.ftakeDraft, !!s.ftakeLast, s.closeStep, s.viewTs,
   s.openStep, s.openViewTs, s.repSec, !!s.repAll, s.debSel, !!s.debPayDraft, !!s.debEditDraft,
-  s.cbSel, !!s.cbDraft, !!s.cbSpendDraft]); }
+  s.cbSel, !!s.cbDraft, !!s.cbSpendDraft, s.setSec]); }
 function officeBack(){ const s = navStack.pop(); if (!s) return; navRestoring = true;
   office = s.office; supSel = s.supSel; supPayDraft = s.supPayDraft; supEditDraft = s.supEditDraft;
   cutDraft = s.cutDraft; issueDraft = s.issueDraft; ftakeDraft = s.ftakeDraft; ftakeLast = s.ftakeLast;
   closeStep = s.closeStep; viewTs = s.viewTs; openStep = s.openStep; openViewTs = s.openViewTs;
   repSec = s.repSec; repAll = s.repAll;
   debSel = s.debSel; debPayDraft = s.debPayDraft; debEditDraft = s.debEditDraft;
-  cbSel = s.cbSel; cbDraft = s.cbDraft; cbSpendDraft = s.cbSpendDraft; render(); }
+  cbSel = s.cbSel; cbDraft = s.cbDraft; cbSpendDraft = s.cbSpendDraft; setSec = s.setSec; render(); }
 function tbar(){ const b = document.getElementById('tbar');
   const total = ticket.reduce((s,l)=>s+l.amt,0);
   const show = tab==='sell' && view!=='charge' && view!=='acct' && ticket.length;
@@ -853,19 +858,18 @@ function closeConfirm(yes){ document.getElementById('confirm').classList.remove(
 function officeView(){
   if (office !== 'items') itemsSnap = null;
   if (!canSee(office)) office = 'goods';        // supervisor can't land on owner-only screens
-  const sub = `<div class="subnav">
-    <button class="${office==='open'?'on':''}" onclick="office='open';render()">Open Day${openedToday()?'':' ⚠'}</button>
-    <button class="${['goods','suppliers'].includes(office)?'on':''}" onclick="office='goods';render()">Goods In</button>
-    <button class="${['stock','cut','issue','ftake'].includes(office)?'on':''}" onclick="office='stock';ftakeLast=null;render()">Stock${lowStock().length?' ⚠':''}</button>
-    <button class="${office==='close'?'on':''}" onclick="office='close';render()">Close</button>
-    <button class="${office==='debtors'?'on':''}" onclick="office='debtors';debSel=null;debPayDraft=null;debEditDraft=null;render()">Debtors${debtTotal()>0.001?' ⚠':''}</button>
-    ${role==='owner'?`<button class="${office==='cashbook'?'on':''}" onclick="office='cashbook';cbSel=null;cbDraft=null;cbSpendDraft=null;render()">Cash Book${cashPending().length?' ⚠':''}</button>`:''}
-    ${role==='owner'?`<button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>`:''}
-    <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
+  // two-level nav: workflow groups on top, the group's screens as pills underneath
+  const grp = officeGroup(office);
+  const dayWarn = (!openedToday() || (role==='owner' && cashPending().length)) ? ' ⚠' : '';
+  const sub = `<div class="subnav" style="margin-bottom:6px">
+    <button class="${grp==='day'?'on':''}" onclick="goGroup('day')">☀️ Day${dayWarn}</button>
+    <button class="${grp==='stock'?'on':''}" onclick="goGroup('stock')">📦 Stock${lowStock().length?' ⚠':''}</button>
+    <button class="${grp==='accounts'?'on':''}" onclick="goGroup('accounts')">👥 Accounts${debtTotal()>0.001?' ⚠':''}</button>
+    ${role==='owner'?`<button class="${grp==='reports'?'on':''}" onclick="goGroup('reports')">📊 Reports</button>`:''}
     ${role==='owner'
-      ?`<button class="${office==='settings'||office==='audit'?'on':''}" onclick="office='settings';render()">Settings</button>`
+      ?`<button class="${grp==='settings'?'on':''}" onclick="goGroup('settings')">⚙️ Settings</button>`
       :`<button onclick="lockOffice()">🔒 Lock</button>`}
-  </div>`;
+  </div>` + groupPills(grp);
   if (office==='reports') return sub + reportsView();
   if (office==='goods') return sub + deliveriesView();
   if (office==='suppliers') return sub + suppliersView();
@@ -881,6 +885,52 @@ function officeView(){
   if (office==='audit') return sub + auditView();
   return sub + settingsView();
 }
+// screens grouped by workflow: Day = the daily rituals in time order, Stock = goods through
+// the shop, Accounts = the two credit books. The group is derived from the open screen, so
+// every existing cross-link (e.g. sell screen → Issue stock) still lands in the right place.
+function officeGroup(o){
+  if (['open','close','cashbook'].includes(o)) return 'day';
+  if (['goods','stock','cut','issue','ftake','items'].includes(o)) return 'stock';
+  if (['debtors','suppliers'].includes(o)) return 'accounts';
+  return o === 'reports' ? 'reports' : 'settings';
+}
+function closedToday(){ return closes.length > 0 && closes[closes.length-1].date === today(); }
+// tapping DAY meets you where the day is: open it, close it, or collect the cash
+function dayLand(){
+  if (!openedToday()) return 'open';
+  if (role === 'owner' && closedToday() && cashPending().length) return 'cashbook';
+  return 'close';
+}
+function goGroup(g){
+  if (g === 'day'){ office = dayLand();
+    if (office === 'cashbook'){ cbSel = null; cbDraft = null; cbSpendDraft = null; } }
+  else if (g === 'stock'){ office = 'goods'; }
+  else if (g === 'accounts'){ office = 'debtors'; debSel = null; debPayDraft = null; debEditDraft = null; }
+  else if (g === 'reports'){ office = 'reports'; }
+  else { office = 'settings'; setSec = null; }
+  render();
+}
+function groupPills(grp){
+  const pill = (on, click, label) => `<button class="${on?'on':''}" onclick="${click}">${label}</button>`;
+  let pills = '';
+  if (grp === 'day')
+    pills = pill(office==='open', "office='open';render()", 'Open Day'+(openedToday()?'':' ⚠'))
+      + pill(office==='close', "office='close';render()", 'Close')
+      + (role==='owner' ? pill(office==='cashbook',
+          "office='cashbook';cbSel=null;cbDraft=null;cbSpendDraft=null;render()",
+          'Cash Book'+(cashPending().length?' ⚠':'')) : '');
+  else if (grp === 'stock')
+    pills = pill(office==='goods', "office='goods';render()", 'Goods In')
+      + pill(['stock','cut','issue','ftake'].includes(office), "office='stock';ftakeLast=null;render()",
+          'Stock'+(lowStock().length?' ⚠':''))
+      + pill(office==='items', "office='items';render()", 'Items');
+  else if (grp === 'accounts')
+    pills = pill(office==='debtors', "office='debtors';debSel=null;debPayDraft=null;debEditDraft=null;render()",
+          'Debtors'+(debtTotal()>0.001?' ⚠':''))
+      + pill(office==='suppliers', "office='suppliers';supSel=null;supPayDraft=null;supEditDraft=null;render()",
+          'Suppliers');
+  return pills ? `<div class="pillrow">${pills}</div>` : '';
+}
 function rangeSales(){ return sales.filter(s => s.date >= repFrom && s.date <= repTo); }
 function costOf(name){ const p = products.find(x => x.name === name); return p ? p.cost||0 : 0; }
 function lineCost(l){ return l.kg * (l.cost != null ? l.cost : costOf(l.name)); }
@@ -888,6 +938,10 @@ function lowStock(){ return products.filter(p => p.low > 0 && onHand(p) <= p.low
 // cash legitimately paid out of the till at a close, and the till gap that accounts for it.
 // c.float (declared at that day's open) means the whole drawer was counted, float included.
 function payoutOf(c){ return round2((c.payouts||[]).reduce((s,x)=>s+(parseFloat(x.amt)||0),0)); }
+function exCatOpts(sel){ return '<option value="">category…</option>' +
+  shop.exCats.map(c=>`<option value="${esc(c)}"${sel===c?' selected':''}>${esc(c)}</option>`).join(''); }
+// old records carry no category; supplier auto-payouts are recognisable by their reason
+function exCatOf(p){ return p.cat || (/^Supplier: /.test(p.reason||'') ? 'Stock / supplier' : 'Uncategorised'); }
 // debtor money received into the day's till/statements since the last close (recorded on the close)
 function recvInOf(c, method){ return round2((c.recvIn||[])
   .filter(x => !method || x.method === method).reduce((s,x)=>s+(x.amt||0),0)); }
@@ -1045,6 +1099,11 @@ function reportsView(){
       <button class="${repSec==='controls'?'on':''}" onclick="repSec='controls';render()">Controls${leak>0?' ⚠':''}</button>
     </div>`;
   if (repSec === 'pl'){
+    const byCat = {};                                 // till pay-outs in range, grouped by category
+    for (const c of rc) for (const p of (c.payouts||[]))
+      { const k = exCatOf(p); byCat[k] = round2((byCat[k]||0) + (parseFloat(p.amt)||0)); }
+    const catRows = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([k,v]) =>
+      `<tr><td>${esc(k)}</td><td class="n">${fmt(v)}</td></tr>`).join('');
     return head + `
     <div class="hero"><span>Net operating profit · ${days} day${days===1?'':'s'}</span>
       <b style="color:${netOp<0?'var(--red)':'var(--greend)'}">${fmt(netOp)}</b>
@@ -1059,6 +1118,7 @@ function reportsView(){
       <div class="kpi"><b>${fmt(cogs)}</b><span>Cost of goods sold (reorder value)</span></div>
       ${shop.loan>0?`<div class="kpi"><b${afterLoan<0?' style="color:var(--red)"':''}>${fmt(afterLoan)}</b><span>After loan (${fmt(round2(loanDay))}/day financing)</span></div>`:''}
     </div>
+    ${catRows?`<table style="margin-bottom:8px"><tr><th>Cash expenses by category</th><th class="n">$</th></tr>${catRows}</table>`:''}
     ${dayRows?`<table style="margin-bottom:8px"><tr><th>Day</th><th class="n">Sales</th><th class="n">GP</th><th class="n">Ovh</th><th class="n">Net</th></tr>${dayRows}</table>`:''}
     <div class="note">Overheads are absorbed at ${fmt(round2(dailyOvh))}/working day — closed days
       still carry overhead. Financing is shown separately and never mixed into operating profit.
@@ -1496,14 +1556,17 @@ function closeCash(){
                value="${closeDraft.swipe}" onchange="closeDraft.swipe=this.value">
       </div>
       <div class="itemrow lab" style="margin-top:6px"><span>cash paid OUT of the till today (gas, bags, casual labour…)</span></div>
-      ${(closeDraft.payouts||[]).map((po,i) => `<div class="itemrow">
+      ${(closeDraft.payouts||[]).map((po,i) => `<div class="itemrow" style="margin-bottom:2px">
         <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="$ amount"
                value="${po.amt}" onchange="closeDraft.payouts[${i}].amt=this.value">
-        <input style="flex:1.6" placeholder="what for (required)"
-               value="${esc(po.reason||'')}" onchange="closeDraft.payouts[${i}].reason=this.value">
+        <select style="flex:1.3" onchange="closeDraft.payouts[${i}].cat=this.value">${exCatOpts(po.cat)}</select>
         <button class="del" onclick="closeDraft.payouts.splice(${i},1);render()">✕</button>
+      </div>
+      <div class="itemrow">
+        <input style="flex:1" placeholder="what for (required)"
+               value="${esc(po.reason||'')}" onchange="closeDraft.payouts[${i}].reason=this.value">
       </div>`).join('')}
-      <button class="bigbtn grey" onclick="(closeDraft.payouts=closeDraft.payouts||[]).push({amt:'',reason:''});render()">+ Add a cash pay-out</button>
+      <button class="bigbtn grey" onclick="(closeDraft.payouts=closeDraft.payouts||[]).push({amt:'',reason:'',cat:''});render()">+ Add a cash pay-out</button>
       <div class="note">Every dollar taken from the till for a shop expense goes here — otherwise it
         reads as a shortage. These are logged and reduce the day's profit.</div>
       <div class="itemrow" style="margin-bottom:0;margin-top:6px">
@@ -1542,11 +1605,13 @@ function doClose(){
   const rawPo = (closeDraft.payouts||[]).filter(p => (parseFloat(p.amt)||0) > 0);
   if (rawPo.some(p => !String(p.reason||'').trim())){
     toast('Every cash pay-out needs a reason', true); return; }        // don't lock without it
-  const payouts = rawPo.map(p => ({amt:round2(parseFloat(p.amt)), reason:String(p.reason).trim()}));
+  if (rawPo.some(p => !p.cat)){
+    toast('Pick a category for every cash pay-out', true); return; }   // the accountant needs it
+  const payouts = rawPo.map(p => ({amt:round2(parseFloat(p.amt)), reason:String(p.reason).trim(), cat:p.cat}));
   // supplier payments made from the till since the last close appear here automatically,
   // so a legitimate cash payout never reads as a till shortage
   const tillPays = payments.filter(pm => pm.fromTill && !pm.closedTs && pm.ts > lastTs && pm.ts <= ts);
-  for (const pm of tillPays){ payouts.push({amt:pm.amt, reason:'Supplier: '+pm.supplier}); pm.closedTs = ts; }
+  for (const pm of tillPays){ payouts.push({amt:pm.amt, reason:'Supplier: '+pm.supplier, cat:'Stock / supplier'}); pm.closedTs = ts; }
   // debtor payments received since the last close raise what the till/statements should hold
   // (Bank payments go straight to the owner and never touch the till)
   const recvIns = debtorPays.filter(pm => !pm.closedTs && pm.method !== 'Bank' && pm.ts > lastTs && pm.ts <= ts);
@@ -1568,7 +1633,7 @@ function doClose(){
   closes.push(c);
   const theoT = round2(theo.Cash + theo.EcoCash + theo.Swipe);
   const missing = round2(lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
-  for (const p of payouts) logAudit('cash-payout', fmt(p.amt)+' — '+p.reason);
+  for (const p of payouts) logAudit('cash-payout', fmt(p.amt)+' ('+(p.cat||'—')+') — '+p.reason);
   logAudit('close', 'till '+fmt(tillGapOf(c))+' vs takings '+fmt(theoT)+
     (acctT?', on account '+fmt(acctT):'')+
     (recvInOf(c)?', debtor money in '+fmt(recvInOf(c)):'')+
@@ -1618,7 +1683,7 @@ function closeResult(){
       ${rows || '<tr><td colspan="5" style="color:#999">No lines counted</td></tr>'}</table>
     ${payout ? `<div class="salecard" style="border-left:4px solid #fb8c00">
       <b>Cash paid out: ${fmt(payout)}</b>
-      <div class="lines">${c.payouts.map(p=>fmt(p.amt)+' — '+esc(p.reason)).join('<br>')}</div></div>` : ''}
+      <div class="lines">${c.payouts.map(p=>fmt(p.amt)+' — '+esc(p.reason)+(p.cat?' <span style="color:#888">('+esc(p.cat)+')</span>':'')).join('<br>')}</div></div>` : ''}
     ${c.acct ? `<div class="salecard" style="border-left:4px solid #94433a">
       <b>Sold on account today: ${fmt(c.acct)}</b>
       <div class="lines">Revenue earned but no money expected in the till for it — it sits in the
@@ -2218,6 +2283,8 @@ function cbSpendView(){
         <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="0.00"
                value="${esc(d.amt)}" onchange="cbSpendDraft.amt=this.value">
       </div>
+      <div class="itemrow">
+        <select style="flex:1" onchange="cbSpendDraft.cat=this.value">${exCatOpts(d.cat)}</select></div>
       <div class="itemrow" style="margin-bottom:0">
         <input style="flex:1" placeholder="What for (required — e.g. rent for July, banked)"
                value="${esc(d.what)}" onchange="cbSpendDraft.what=this.value"></div>
@@ -2231,12 +2298,13 @@ function doCbSpend(){
   if (!(amt > 0)){ toast('Enter the amount', true); return; }
   const what = String(d.what||'').trim();
   if (!what){ toast('Say what the money is for', true); return; }
+  if (!d.cat){ toast('Pick a category for this spend', true); return; }
   const bal = envBal(d.env);
   const go = () => {
     envs[d.env] = round2(bal - amt);
     cashbook.push({id:Date.now(), ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
-      kind:'spend', env:d.env, amt, what});
-    logAudit('cash-spend', fmt(amt)+' from the '+d.env+' envelope — '+what);
+      kind:'spend', env:d.env, amt, what, cat:d.cat});
+    logAudit('cash-spend', fmt(amt)+' from the '+d.env+' envelope ('+d.cat+') — '+what);
     cbSpendDraft = null; save(); render(); toast('Spent from '+d.env);
   };
   if (amt > bal + 0.001)
@@ -2254,10 +2322,10 @@ function cbEnvView(){
           <span style="color:var(--greend)">+${fmt(x.alloc[cbSel]||0)}</span></div></div>`
       : `<div class="salecard"><div class="top"><span>${x.date} ${x.time} · spent</span>
           <span style="color:var(--red)">−${fmt(x.amt)}</span></div>
-         <div class="lines">${esc(x.what)}</div></div>`).join('');
+         <div class="lines">${esc(x.what)}${x.cat?' · '+esc(x.cat):''}</div></div>`).join('');
   return `<div class="hero"><span>${e.emoji} ${esc(e.name)}</span>
       <b style="color:${bal<-0.001?'var(--red)':e.color}">${fmt(bal)}</b><span>${esc(e.hint)}</span></div>
-    <button class="bigbtn" onclick="cbSpendDraft={env:'${esc(e.name)}',amt:'',what:''};render()">− SPEND FROM THIS ENVELOPE</button>
+    <button class="bigbtn" onclick="cbSpendDraft={env:'${esc(e.name)}',amt:'',what:'',cat:''};render()">− SPEND FROM THIS ENVELOPE</button>
     <button class="bigbtn grey" onclick="cbSel=null;render()">‹ All envelopes</button>
     ${rows || '<div class="note">No movements yet.</div>'}`;
 }
@@ -2285,7 +2353,7 @@ function cashbookView(){
          ${ENVS.filter(v=>(e.alloc[v.name]||0)>0.001).map(v=>v.name+' '+fmt(e.alloc[v.name])).join(', ')||'nothing allocated'}${e.note?' · '+esc(e.note):''}</div></div>`
     : `<div class="salecard"><div class="top"><span>${e.date} · ${esc(e.env)}</span>
         <span style="color:var(--red)">−${fmt(e.amt)}</span></div>
-       <div class="lines">${esc(e.what)}</div></div>`).join('');
+       <div class="lines">${esc(e.what)}${e.cat?' · '+esc(e.cat):''}</div></div>`).join('');
   return `<div class="icard">
       <b style="font-size:15px">Cash Book — where the till cash goes</b>
       <div class="note" style="margin-top:6px">The after-close ritual: collect the cash (leave tomorrow's
@@ -2293,7 +2361,7 @@ function cashbookView(){
         the meat can be bought back, rent, overheads and the loan get their daily share, and whatever is
         left is <b>profit, set aside</b>. Envelopes keep a running balance until spent out. Cash in
         envelopes now: <b>${fmt(envTotal())}</b>.</div>
-      <button class="bigbtn grey" onclick="cbSpendDraft={env:'Restock',amt:'',what:''};render()">− SPEND FROM AN ENVELOPE</button>
+      <button class="bigbtn grey" onclick="cbSpendDraft={env:'Restock',amt:'',what:'',cat:''};render()">− SPEND FROM AN ENVELOPE</button>
     </div>
     ${pending}
     ${cards}
@@ -2532,12 +2600,32 @@ function delItem(i){ ask('Delete "'+products[i].name+'"? Past sales of it stay i
   logAudit('item-deleted', products[i].name+' (stock at deletion: '+onHand(products[i]).toFixed(3)+')');
   products.splice(i,1); save(); render(); }); }
 function settingsView(){
+  // a menu of cards, each opening one tidy section — instead of one endless scroll
+  const MENU = [
+    ['shop',     '🧾', 'Shop &amp; receipts',  'name on the till slip, printer setup, auto-print'],
+    ['security', '🔐', 'Security',             'owner &amp; supervisor PINs, audit log'],
+    ['numbers',  '📐', 'Business numbers',     'close tolerances, overheads &amp; loan, expense categories'],
+    ['data',     '☁️', 'Data &amp; backups',   'live view, cloud backup, file backup &amp; restore'],
+    ['month',    '🗓️', 'Month-end',            'download the month pack, clear old records'],
+  ];
+  if (!setSec)
+    return MENU.map(([k,e,t,d]) => `<div class="salecard" onclick="setSec='${k}';render()">
+        <div class="top"><span style="font-size:16px">${e} ${t}</span><span style="color:#999;font-size:18px">›</span></div>
+        <div class="lines">${d}</div>
+      </div>`).join('') +
+      `<div class="setrow"><span>Lock back office</span>
+        <button onclick="lockOffice()">Lock now</button></div>
+      <div class="note">Data lives only on this device; the weekly cloud backup and the month packs
+        on Drive are the safety net. Clearing the app's storage deletes the sales record.</div>`;
+  const cur = MENU.find(x => x[0] === setSec) || MENU[0];
+  return `<div class="chips"><button onclick="setSec=null;render()">‹ All settings</button></div>
+    <div style="font-size:16px;font-weight:bold;margin:2px 2px 8px">${cur[1]} ${cur[2]}</div>` +
+    (setSec==='shop' ? setShopSec() : setSec==='security' ? setSecuritySec() :
+     setSec==='numbers' ? setNumbersSec() : setSec==='data' ? setDataSec() : setMonthSec());
+}
+function setShopSec(){
   const prn = shop.printer;
-  return `<div class="setrow"><span>Owner PIN</span>
-      <button onclick="changePin()">Change PIN</button></div>
-    <div class="setrow"><span>Supervisor PIN <small style="color:var(--muted)">(no Reports / Settings)</small></span>
-      <button onclick="changeSupPin()">Change PIN</button></div>
-    <div class="ticket" style="margin-bottom:8px">
+  return `<div class="ticket" style="margin-bottom:8px">
       <b style="font-size:15px">Receipts</b>
       <div class="itemrow" style="margin-top:8px">
         <input style="flex:1" value="${esc(shop.name)}" placeholder="Shop name"
@@ -2575,8 +2663,21 @@ function settingsView(){
         <input type="checkbox" ${shop.auto?'checked':''}
                onchange="shop.auto=this.checked;saveShop()">
         Print automatically after every sale</label>
-    </div>
-    <div class="ticket" style="margin-bottom:8px">
+    </div>`;
+}
+function setSecuritySec(){
+  return `<div class="setrow"><span>Owner PIN</span>
+      <button onclick="changePin()">Change PIN</button></div>
+    <div class="setrow"><span>Supervisor PIN <small style="color:var(--muted)">(runs the day)</small></span>
+      <button onclick="changeSupPin()">Change PIN</button></div>
+    <div class="setrow"><span>Audit log <small style="color:var(--muted)">(append-only)</small></span>
+      <button onclick="office='audit';render()">View</button></div>
+    <div class="note">The owner PIN opens everything. The supervisor PIN runs the day but cannot
+      see Reports, the Cash Book or Settings. Change both away from the defaults, and check the
+      audit log now and then — every action in the shop is written there and cannot be edited.</div>`;
+}
+function setNumbersSec(){
+  return `<div class="ticket" style="margin-bottom:8px">
       <b style="font-size:15px">Daily Close tolerances</b>
       <div class="itemrow lab" style="margin-top:8px">
         <span style="flex:1">count tolerance (kg/line)</span><span style="flex:1">till tolerance (%)</span>
@@ -2614,19 +2715,19 @@ function settingsView(){
         it shows as a separate "after loan" line. Set it to 0 when the loan is repaid.</div>
     </div>
     <div class="ticket" style="margin-bottom:8px">
-      <b style="font-size:15px">Month-end archive</b>
-      <div class="itemrow" style="margin-top:8px;margin-bottom:0">
-        <input id="arc-m" type="month" style="flex:1" value="${today().slice(0,7)}">
-      </div>
-      <button class="bigbtn" onclick="archiveMonth()">DOWNLOAD MONTH PACK</button>
-      <button class="bigbtn grey" onclick="pruneOld()">Clear records older than selected month</button>
-      <div class="note">Month-end routine: download the pack (8 CSVs + 1 JSON — allow multiple
-        downloads when Chrome asks) and save all nine files to Google Drive. That folder is the
-        VAT / tax record base for the PBC. Then clear old months to keep the phone light —
-        products, current stock and the audit log are never cleared, and the newest close is
-        always kept.</div>
-    </div>
-    <div class="ticket" style="margin-bottom:8px">
+      <b style="font-size:15px">Expense categories</b>
+      ${shop.exCats.map((c,i) => `<div class="itemrow"${i===0?' style="margin-top:8px"':''}>
+        <input style="flex:1" value="${esc(c)}" onchange="shop.exCats[${i}]=this.value.trim()||'Other';saveShop()">
+        <button class="del" onclick="shop.exCats.splice(${i},1);if(!shop.exCats.length)shop.exCats=['Other'];saveShop();render()">✕</button>
+      </div>`).join('')}
+      <button class="bigbtn grey" onclick="shop.exCats.push('New category');saveShop();render()">+ Add category</button>
+      <div class="note">Every cash pay-out at the Close and every envelope spend picks one of these —
+        that's what groups the expenses for Reports and for the accountant's month pack. Keep the
+        list short; renaming here only affects new entries, old ones keep the name they were saved with.</div>
+    </div>`;
+}
+function setDataSec(){
+  return `<div class="ticket" style="margin-bottom:8px">
       <b style="font-size:15px">Live view — watch from your own phone</b>
       <div class="note" style="margin-top:6px">See the shop from your own phone without touching the till:
         a <b>LIVE</b> tab with today’s sales as they happen, and a <b>REPORTS</b> tab — the full
@@ -2661,21 +2762,32 @@ function settingsView(){
       : `<div class="note" style="margin-top:6px">Needs the Live view relay above — paste the relay URL
           there first, and weekly cloud backups switch on by themselves.</div>`}
     </div>
-    <div class="setrow"><span>Audit log</span>
-      <button onclick="office='audit';render()">View</button></div>
-    <div class="setrow"><span>Backup all data</span>
+    <div class="setrow"><span>Backup all data <small style="color:var(--muted)">(one file)</small></span>
       <button onclick="backup()">Download</button></div>
     <div class="setrow"><span>Restore from backup</span>
       <button onclick="restore()">Choose file</button></div>
-    <div class="setrow"><span>Clear test data (keep products &amp; settings)</span>
+    <div class="note">The cloud backup runs weekly by itself; still download a file backup
+      before any phone repair or reset and save it to Google Drive.</div>
+    <div class="note" style="color:var(--red);margin:10px 0 6px"><b>Danger zone</b> — these delete records for good.</div>
+    <div class="setrow"><span>Clear test data <small style="color:var(--muted)">(keeps products &amp; settings)</small></span>
       <button onclick="clearData(false)">Clear</button></div>
     <div class="setrow"><span>Full factory reset</span>
-      <button style="color:var(--red);border-color:var(--red)" onclick="clearData(true)">Reset</button></div>
-    <div class="setrow"><span>Lock back office</span>
-      <button onclick="lockOffice()">Lock now</button></div>
-    <div class="note">The cloud backup above runs weekly by itself; still download a file backup
-      before any phone repair or reset and save it to Google Drive. Data lives only on this
-      device; clearing the app's storage deletes the sales record.</div>`;
+      <button style="color:var(--red);border-color:var(--red)" onclick="clearData(true)">Reset</button></div>`;
+}
+function setMonthSec(){
+  return `<div class="ticket" style="margin-bottom:8px">
+      <b style="font-size:15px">Month-end archive</b>
+      <div class="itemrow" style="margin-top:8px;margin-bottom:0">
+        <input id="arc-m" type="month" style="flex:1" value="${today().slice(0,7)}">
+      </div>
+      <button class="bigbtn" onclick="archiveMonth()">DOWNLOAD MONTH PACK</button>
+      <button class="bigbtn grey" onclick="pruneOld()">Clear records older than selected month</button>
+      <div class="note">Month-end routine: download the pack (9 CSVs + 1 JSON — allow multiple
+        downloads when Chrome asks) and save all ten files to Google Drive. That folder is the
+        VAT / tax record base for the PBC. Then clear old months to keep the phone light —
+        products, current stock and the audit log are never cleared, and the newest close is
+        always kept.</div>
+    </div>`;
 }
 function changePin(){ pinAsk('Enter NEW 4-digit PIN', p1 =>
   pinAsk('Repeat new PIN', p2 => {
@@ -2743,13 +2855,21 @@ function archiveMonth(){
       ...A.map(a => [a.date, a.time, a.name, a.loc||'', a.from.toFixed(3), a.to.toFixed(3), a.delta.toFixed(3),
         (a.cost||0).toFixed(2), round2(a.delta*(a.cost||0)).toFixed(2), a.reason||''])])],
     ['cash-book-'+m+'.csv', csvOf([
-      ['Date','Time','Entry','Close date','Counted','Left as float','Collected','Restock','Rent & utilities','Overheads','Loan','Profit set aside','Envelope','Spent','What for','Note'],
+      ['Date','Time','Entry','Close date','Counted','Left as float','Collected','Restock','Rent & utilities','Overheads','Loan','Profit set aside','Envelope','Spent','Category','What for','Note'],
       ...CB.map(e => e.kind === 'collect'
         ? [e.date, e.time, 'collect', e.closeDate||'', e.counted.toFixed(2), e.left.toFixed(2), e.collected.toFixed(2),
            (e.alloc['Restock']||0).toFixed(2), (e.alloc['Rent & utilities']||0).toFixed(2),
            (e.alloc['Overheads']||0).toFixed(2), (e.alloc['Loan']||0).toFixed(2),
-           (e.alloc['Profit set aside']||0).toFixed(2), '', '', '', e.note||'']
-        : [e.date, e.time, 'spend', '', '', '', '', '', '', '', '', '', e.env, e.amt.toFixed(2), e.what||'', ''])])],
+           (e.alloc['Profit set aside']||0).toFixed(2), '', '', '', '', e.note||'']
+        : [e.date, e.time, 'spend', '', '', '', '', '', '', '', '', '', e.env, e.amt.toFixed(2), e.cat||'', e.what||'', ''])])],
+    // one expense ledger the accountant can pivot straight onto a chart of accounts:
+    // every till pay-out and every envelope spend, each with its category
+    ['expenses-'+m+'.csv', csvOf([
+      ['Date','Paid from','Category','Amount','Details'],
+      ...C.flatMap(c => (c.payouts||[]).map(p =>
+        [c.date, 'Till (at close)', exCatOf(p), (parseFloat(p.amt)||0).toFixed(2), p.reason||''])),
+      ...CB.filter(e => e.kind === 'spend').map(e =>
+        [e.date, e.env+' envelope', e.cat||'Uncategorised', e.amt.toFixed(2), e.what||''])])],
     ['archive-'+m+'.json', JSON.stringify({month:m, exported:today(), products, suppliers, debtors, envs,
       sales:S, deliveries:D, batches:B, closes:C, opens:O, adjustments:A, payments:P, debtorPays:DP, cashbook:CB})]
   ];
@@ -2759,7 +2879,7 @@ function archiveMonth(){
     P.length+' payments, '+DP.length+' debtor payments, '+CB.length+' cash book entries, '+
     B.length+' batches, '+C.length+' closes, '+A.length+' adjustments)');
   save(); cloudBackup(true, true);
-  toast('Month pack downloading — save all 9 files to Drive');
+  toast('Month pack downloading — save all 10 files to Drive');
 }
 function pruneOld(){
   const m = (document.getElementById('arc-m')||{}).value || today().slice(0,7);
