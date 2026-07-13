@@ -42,9 +42,10 @@ There are **two accounts**, told apart by the PIN entered:
 
 - **Owner** (default PIN **2026**) — full back office, including Reports and Settings.
 - **Shop supervisor** (default PIN **1234**) — day-to-day running only: Goods In, Stock,
-  Close and Items, plus a **🔒 Lock** button. **Reports and Settings are hidden**, so the
-  supervisor can trade, receive stock and cash up without seeing profit figures, and can't
-  change PINs, printer/receipt setup or reset the data (all Settings-only actions).
+  Close and Items, plus a **🔒 Lock** button. **Reports, the Cash Book and Settings are
+  hidden**, so the supervisor can trade, receive stock and cash up without seeing profit
+  figures or the owner's cash position, and can't change PINs, printer/receipt setup or
+  reset the data (all Settings-only actions).
 
 Change both PINs in **Settings** on day one (owner only). The two PINs can't be set the same.
 
@@ -63,8 +64,9 @@ Change both PINs in **Settings** on day one (owner only). The two PINs can't be 
   and net — loss-making days go red.
   Below that sits the **controls dashboard** for the same date range:
   till gap across the closes, missing stock at retail, cutting yield and waste,
-  cutting uplift, what's owing to suppliers right now, and the single number that
-  matters — **Leakage** (missing stock + till shortfall), red whenever it isn't zero.
+  cutting uplift, what's owing to suppliers and owed by debtors right now, the
+  profit set aside in the cash book, and the single number that matters —
+  **Leakage** (missing stock + till shortfall), red whenever it isn't zero.
 - **Goods In** — every delivery is received here: supplier, item, **invoiced qty vs
   your own scale's weighed qty**, cost per unit, paid or on account. The item picker
   is split in two: **carcass/raw lines** (beef forequarters and hindquarters, pork
@@ -132,6 +134,18 @@ Change both PINs in **Settings** on day one (owner only). The two PINs can't be 
   outside the till). Payments settle the oldest sales first, partial payments work, and
   a debtor-payments CSV joins the month-end pack. Old unpaid account sales survive
   month-end pruning — a debt is never lost by housekeeping.
+- **Cash Book** (owner only) — the after-close ritual, in the app instead of a paper book.
+  Each close the owner hasn't dealt with yet shows as a card: **collect the till cash**
+  (leave tomorrow's float in the drawer — the amount is remembered and prefills the next
+  morning's Open Day) and **split it into five envelopes** — **Restock** at the day's
+  cost of sold (the meat must be bought back), **Rent & utilities**, **Overheads** and
+  **Loan** at their daily share from Settings, and whatever remains goes to **Profit set
+  aside** automatically. The suggested split feeds the envelopes in that order until the
+  cash runs out; every figure can be changed before the record locks. Envelopes keep
+  **running balances** until spent out (spends need a what-for and are audited), and a
+  supplier payment can be drawn **straight from the Restock envelope** with a tick on the
+  payment form. The balances survive month-end pruning, the history joins the month pack
+  as its own CSV, and Reports → Controls shows the profit-set-aside figure at a glance.
 - **Close** — the evening ritual, ~10 minutes: **blind chiller count** (weigh every line
   on the sales counter and enter the scale figure — the app hides what it expects, so the
   count is a measurement, not a confirmation; the freezer is counted weekly, separately),
@@ -159,11 +173,11 @@ Change both PINs in **Settings** on day one (owner only). The two PINs can't be 
 
 ## Month-end archive (the VAT / tax record base)
 
-Settings → Month-end archive → pick the month → **DOWNLOAD MONTH PACK**: seven CSVs
-(sales line-by-line, deliveries, supplier payments, debtor payments, cutting batches,
-daily closes incl. cash paid out and debtor money in, and stock adjustments /
-write-offs) plus one JSON of everything. Allow multiple
-downloads when Chrome asks, and save all eight files to a
+Settings → Month-end archive → pick the month → **DOWNLOAD MONTH PACK**: eight CSVs
+(sales line-by-line, deliveries, supplier payments, debtor payments, cash book
+collections and spends, cutting batches, daily closes incl. cash paid out and debtor
+money in, and stock adjustments / write-offs) plus one JSON of everything. Allow multiple
+downloads when Chrome asks, and save all nine files to a
 Google Drive folder per month — that folder is the PBC's books and the VAT working
 base when registration lands (~Feb–Mar 2027). Then **Clear records older than the
 selected month** to keep the phone light: products, current stock and the audit log

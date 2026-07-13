@@ -391,6 +391,9 @@ let supSel = null, supPayDraft = null, supEditDraft = null;   // supplier accoun
 let debtors = load('mc_debtors', []);               // customer credit book {name, phone, note}
 let debtorPays = load('mc_debtorPays', []);         // payments received {id, ts, date, time, debtor, amt, method, note, alloc, credit, closedTs}
 let debSel = null, debPayDraft = null, debEditDraft = null, acctPick = null;   // debtors UI state
+let cashbook = load('mc_cashbook', []);             // owner's cash book: collect-and-split + envelope spends
+let envs = load('mc_envs', {});                     // running envelope balances {name: $} — survive pruning
+let cbSel = null, cbDraft = null, cbSpendDraft = null;   // cash book UI state
 let shop = load('mc_shop', { name:'Meat Centre', line2:'', footer:'Thank you, come again!',
                              printer:'off', auto:false, tolKg:0.2, tolTill:0.02 });
 if (shop.tolKg == null) shop.tolKg = 0.2;      // count tolerance per line
@@ -419,6 +422,8 @@ function save(){ localStorage.setItem('mc_products', JSON.stringify(products));
                  localStorage.setItem('mc_adjust', JSON.stringify(adjustments));
                  localStorage.setItem('mc_debtors', JSON.stringify(debtors));
                  localStorage.setItem('mc_debtorPays', JSON.stringify(debtorPays));
+                 localStorage.setItem('mc_cashbook', JSON.stringify(cashbook));
+                 localStorage.setItem('mc_envs', JSON.stringify(envs));
                  syncPush(); maybeCloudBackup(); }
 function logAudit(type, detail, who){
   const e = {date:today(), time:new Date().toTimeString().slice(0,5), type, detail};
@@ -446,14 +451,14 @@ function goOffice(){ if (pinOK) { tab = 'office'; render(); }
       pinOK = true; role = 'owner'; tab = 'office'; render(); }
     else if (pin === (localStorage.getItem('mc_pin_sup') || '1234')) {
       pinOK = true; role = 'supervisor';
-      if (['reports','settings','audit'].includes(office)) office = 'goods';
+      if (!canSee(office)) office = 'goods';
       tab = 'office'; render(); }
     else { toast('Wrong PIN', true); }
   });
 }
 function lockOffice(){ pinOK = false; role = null; navStack = []; navLast = null;
   goSell(); toast('Locked'); }
-function canSee(o){ return role === 'owner' || !['reports','settings','audit'].includes(o); }
+function canSee(o){ return role === 'owner' || !['reports','settings','audit','cashbook'].includes(o); }
 function render(){
   if (viewMode){ viewRender(); return; }              // owner's read-only device
   document.getElementById('hdrdate').textContent = today();
@@ -482,16 +487,18 @@ function render(){
 let navStack = [], navLast = null, navRestoring = false;
 function navSnapshot(){ return {office, supSel, supPayDraft, supEditDraft, cutDraft, issueDraft,
   ftakeDraft, ftakeLast, closeStep, viewTs, openStep, openViewTs, repSec, repAll,
-  debSel, debPayDraft, debEditDraft}; }
+  debSel, debPayDraft, debEditDraft, cbSel, cbDraft, cbSpendDraft}; }
 function navKey(s){ return JSON.stringify([s.office, s.supSel, !!s.supPayDraft, !!s.supEditDraft,
   !!s.cutDraft, !!s.issueDraft, !!s.ftakeDraft, !!s.ftakeLast, s.closeStep, s.viewTs,
-  s.openStep, s.openViewTs, s.repSec, !!s.repAll, s.debSel, !!s.debPayDraft, !!s.debEditDraft]); }
+  s.openStep, s.openViewTs, s.repSec, !!s.repAll, s.debSel, !!s.debPayDraft, !!s.debEditDraft,
+  s.cbSel, !!s.cbDraft, !!s.cbSpendDraft]); }
 function officeBack(){ const s = navStack.pop(); if (!s) return; navRestoring = true;
   office = s.office; supSel = s.supSel; supPayDraft = s.supPayDraft; supEditDraft = s.supEditDraft;
   cutDraft = s.cutDraft; issueDraft = s.issueDraft; ftakeDraft = s.ftakeDraft; ftakeLast = s.ftakeLast;
   closeStep = s.closeStep; viewTs = s.viewTs; openStep = s.openStep; openViewTs = s.openViewTs;
   repSec = s.repSec; repAll = s.repAll;
-  debSel = s.debSel; debPayDraft = s.debPayDraft; debEditDraft = s.debEditDraft; render(); }
+  debSel = s.debSel; debPayDraft = s.debPayDraft; debEditDraft = s.debEditDraft;
+  cbSel = s.cbSel; cbDraft = s.cbDraft; cbSpendDraft = s.cbSpendDraft; render(); }
 function tbar(){ const b = document.getElementById('tbar');
   const total = ticket.reduce((s,l)=>s+l.amt,0);
   const show = tab==='sell' && view!=='charge' && view!=='acct' && ticket.length;
@@ -852,6 +859,7 @@ function officeView(){
     <button class="${['stock','cut','issue','ftake'].includes(office)?'on':''}" onclick="office='stock';ftakeLast=null;render()">Stock${lowStock().length?' ⚠':''}</button>
     <button class="${office==='close'?'on':''}" onclick="office='close';render()">Close</button>
     <button class="${office==='debtors'?'on':''}" onclick="office='debtors';debSel=null;debPayDraft=null;debEditDraft=null;render()">Debtors${debtTotal()>0.001?' ⚠':''}</button>
+    ${role==='owner'?`<button class="${office==='cashbook'?'on':''}" onclick="office='cashbook';cbSel=null;cbDraft=null;cbSpendDraft=null;render()">Cash Book${cashPending().length?' ⚠':''}</button>`:''}
     ${role==='owner'?`<button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>`:''}
     <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
     ${role==='owner'
@@ -868,6 +876,7 @@ function officeView(){
   if (office==='open') return sub + openView();
   if (office==='close') return sub + closeView();
   if (office==='debtors') return sub + debtorsView();
+  if (office==='cashbook') return sub + cashbookView();
   if (office==='items') return sub + itemsAdmin();
   if (office==='audit') return sub + auditView();
   return sub + settingsView();
@@ -1067,6 +1076,7 @@ function reportsView(){
       <div class="kpi"><b>${fmt(uplift)}</b><span>Cutting uplift</span></div>
       <div class="kpi"><b${owe>0?' style="color:#fb8c00"':''}>${fmt(owe)}</b><span>Owing suppliers (now)</span></div>
       <div class="kpi" onclick="office='debtors';render()"><b${debtTotal()>0.001?' style="color:#94433a"':''}>${fmt(debtTotal())}</b><span>Owed by debtors (now)</span></div>
+      <div class="kpi" onclick="office='cashbook';cbSel=null;render()"><b style="color:#5d8a2c">${fmt(envBal('Profit set aside'))}</b><span>Profit set aside (cash book)</span></div>
     </div>
     <div class="note">From the daily closes, the cutting log, the supplier book and the debtors book.
       Anything red needs an answer today — leakage is stock that left the shop without money coming in.
@@ -1289,11 +1299,25 @@ function openView(){
       ${t ? `<div class="salecard" style="border-left:4px solid var(--green);margin-top:8px">
         <b>Today is open</b> — ${esc(t.who)} at ${t.time}, float ${fmt(t.float)}.
         <div class="lines">Tonight's Close will expect float + cash takings — count the whole till, float included.</div></div>`
-      : `<button class="bigbtn" onclick="openDraft={who:localStorage.getItem('mc_lastOpener')||'',fl:'',checks:{},note:''};openStep='form';render()">OPEN THE DAY</button>`}
+      : `<button class="bigbtn" onclick="startOpen()">OPEN THE DAY</button>`}
     </div>
     ${cards || '<div class="note">No opens recorded yet.</div>'}`;
 }
+// last night's cash-book collection left a known float in the drawer — carry it into the open
+function lastFloatLeft(){
+  const e = [...cashbook].reverse().find(x => x.kind === 'collect');
+  if (!e) return null;
+  const days = Math.round((new Date(today()) - new Date(e.date)) / 86400000);
+  return days >= 0 && days <= 2 ? e : null;     // only if the collection is recent
+}
+function startOpen(){
+  const lf = lastFloatLeft();
+  openDraft = {who:localStorage.getItem('mc_lastOpener')||'',
+               fl: lf ? String(lf.left) : '', checks:{}, note:''};
+  openStep = 'form'; render();
+}
 function openForm(){
+  const lf = lastFloatLeft();
   const rows = products.map(p => p.raw ? '' :
     `<div class="itemrow">
       <span style="flex:2;font-size:14px">${esc(p.name)} <small style="color:#90a4ae">${esc(p.unit)}</small></span>
@@ -1311,7 +1335,9 @@ function openForm(){
                value="${openDraft.fl}" onchange="openDraft.fl=this.value">
       </div>
       <div class="note">Count the notes and coins physically in the drawer right now — enter 0 if
-        there is no float. This figure is what tonight's Close expects back, on top of cash takings.</div>
+        there is no float. This figure is what tonight's Close expects back, on top of cash takings.${
+        lf ? ' <b>The cash book left '+fmt(lf.left)+' in the drawer after the '+lf.closeDate+
+             ' close</b> — count it anyway and correct the figure if it differs.' : ''}</div>
       <div class="itemrow lab" style="margin-top:10px"><span>optional spot-check — weigh any chiller lines, blind (leave the rest blank)</span></div>
       ${rows}
       <div class="itemrow" style="margin:6px 0 0">
@@ -1537,6 +1563,8 @@ function doClose(){
   if (op){ c.float = op.float; c.opener = op.who; }
   if (recvIn.length) c.recvIn = recvIn;
   if (acctT > 0) c.acct = acctT;
+  // cost of what was sold in this window — the Cash Book's restock figure for the day
+  c.cogs = round2(win.reduce((t,s) => t + s.lines.reduce((x,l) => x + lineCost(l), 0), 0));
   closes.push(c);
   const theoT = round2(theo.Cash + theo.EcoCash + theo.Swipe);
   const missing = round2(lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
@@ -1598,6 +1626,11 @@ function closeResult(){
     ${c.recvIn && c.recvIn.length ? `<div class="salecard" style="border-left:4px solid var(--green)">
       <b>Debtor money received: ${fmt(recvInOf(c))}</b>
       <div class="lines">${c.recvIn.map(x=>esc(x.from)+' '+fmt(x.amt)+' ('+esc(x.method||'Cash')+')').join('<br>')}</div></div>` : ''}
+    ${role==='owner' && !collectedOf(c) && (c.actual.Cash||0) > 0.001 ? `<div class="salecard" style="border-left:4px solid #5d8a2c">
+      <b>Cash book: about ${fmt(Math.max(0, round2((c.actual.Cash||0)-(c.float||0))))} to collect</b>
+      <div class="lines">Once the cash is handed over, go to <b>Cash Book</b> to collect it and split
+        it into the envelopes.
+        <button class="voidbtn" style="border-color:#5d8a2c;color:#5d8a2c" onclick="viewTs=null;closeStep='start';office='cashbook';cbSel=null;cbSpendDraft=null;startCollect(${c.ts})">COLLECT NOW</button></div></div>` : ''}
     ${c.note ? `<div class="salecard"><b>Note:</b> <span class="lines">${esc(c.note)}</span></div>` : ''}
     <div class="note">Closed ${c.date} ${c.time}. This record is locked — stock was reset to the
       counted figures. Small negatives are drip/trim loss; a pattern on the same line or the
@@ -1763,7 +1796,7 @@ function supStatement(){
         <div class="lines">${esc(e.d.item)} ${e.d.invKg.toFixed(3)} ${esc(e.d.unit)} @ ${fmt(e.d.cost)}${outstanding(e.d)>0.001?' · <b style="color:#fb8c00">'+fmt(outstanding(e.d))+' outstanding</b>':' · <span style="color:var(--greend)">settled</span>'}</div>
       </div>`
     : `<div class="salecard">
-        <div class="top"><span>${e.date} · payment${e.p.fromTill?' (till cash)':''}</span><span style="color:var(--greend)">−${fmt(e.p.amt)}</span></div>
+        <div class="top"><span>${e.date} · payment${e.p.fromTill?' (till cash)':''}${e.p.fromBox?' (restock envelope)':''}</span><span style="color:var(--greend)">−${fmt(e.p.amt)}</span></div>
         <div class="lines">${esc(e.p.method)}${e.p.note?' · '+esc(e.p.note):''}${e.p.credit>0.001?' · '+fmt(e.p.credit)+' credit in hand':''}</div>
       </div>`).join('');
   return `<div class="icard">
@@ -1800,8 +1833,12 @@ function supPayView(){
       </div>
       <label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px">
         <input type="checkbox" ${supPayDraft.fromTill?'checked':''}
-               onchange="supPayDraft.fromTill=this.checked">
+               onchange="supPayDraft.fromTill=this.checked;if(this.checked)supPayDraft.fromBox=false;render()">
         Paid from the till cash (adds to tonight's Close as a cash pay-out)</label>
+      ${role==='owner' ? `<label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:8px">
+        <input type="checkbox" ${supPayDraft.fromBox?'checked':''}
+               onchange="supPayDraft.fromBox=this.checked;if(this.checked)supPayDraft.fromTill=false;render()">
+        Paid from the Restock envelope (cash book — holds ${fmt(envBal('Restock'))})</label>` : ''}
       <button class="bigbtn" onclick="doSupPay()">RECORD PAYMENT</button>
       <button class="bigbtn grey" onclick="supPayDraft=null;render()">Cancel</button>
     </div>`;
@@ -1812,7 +1849,14 @@ function doSupPay(){
   const bal = owedBy(supSel);
   const over = amt > bal + 0.001;
   const go = () => {
-    applyPayment(supSel, amt, supPayDraft.method, supPayDraft.fromTill, supPayDraft.note);
+    const pm = applyPayment(supSel, amt, supPayDraft.method, supPayDraft.fromTill, supPayDraft.note);
+    if (supPayDraft.fromBox && role === 'owner'){    // draw the money out of the Restock envelope
+      pm.fromBox = true;
+      envs['Restock'] = round2((envs['Restock']||0) - amt);
+      cashbook.push({id:Date.now()+1, ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+        kind:'spend', env:'Restock', amt, what:'Supplier: '+supSel});
+      logAudit('cash-spend', fmt(amt)+' from the Restock envelope — supplier '+supSel);
+    }
     supPayDraft = null; save(); render();
     toast('Payment recorded'+(over?' — overpayment kept as credit':''));
   };
@@ -2034,6 +2078,226 @@ function doDebtEdit(){
     debSel = name;
   }
   debEditDraft = null; save(); render(); toast('Saved');
+}
+// ---------------- CASH BOOK (the owner's after-close ritual) ----------------
+// After each close the owner collects the till cash (leaving tomorrow's float in the
+// drawer) and splits it into envelopes: Restock gets the day's cost of sold so the meat
+// can be bought back, rent & utilities / overheads / loan get their daily share, and
+// whatever remains is profit, set aside. Balances live in mc_envs so pruning the
+// history (mc_cashbook) never loses the running cash position.
+const ENVS = [
+  {name:'Restock',          emoji:'🥩', color:'#c62828', hint:'buys the sold meat back in — fed at the day\'s cost of sold'},
+  {name:'Rent & utilities', emoji:'🏠', color:'#1e88e5', hint:'the daily share of rent & utilities'},
+  {name:'Overheads',        emoji:'🧾', color:'#fb8c00', hint:'wages, licensing and the other monthly costs, day by day'},
+  {name:'Loan',             emoji:'🏦', color:'#8e24aa', hint:'the daily share of the loan repayment'},
+  {name:'Profit set aside', emoji:'💰', color:'#5d8a2c', hint:'what is left once every envelope is fed — do not trade with it'},
+];
+function envBal(name){ return round2(envs[name]||0); }
+function envTotal(){ return round2(ENVS.reduce((s,e)=>s+envBal(e.name),0)); }
+function rentShare(){ const r = (shop.ovh||[]).find(o => /rent/i.test(o.name||''));
+  return (r ? (r.amt||0) : 0)/(shop.wdays||30); }
+function ovhShare(){ return (shop.ovh||[]).filter(o => !/rent/i.test(o.name||''))
+  .reduce((s,o)=>s+(o.amt||0),0)/(shop.wdays||30); }
+function loanShare(){ return (shop.loan||0)/(shop.wdays||30); }
+// cost of what was sold in a close's takings window; newer closes carry it (c.cogs),
+// for older ones fall back to the sales still on the device
+function closeCogs(c){
+  if (c.cogs != null) return c.cogs;
+  const i = closes.indexOf(c), prev = i > 0 ? closes[i-1].ts : 0;
+  return round2(sales.filter(s => !s.void && s.id > prev && s.id <= c.ts)
+    .reduce((t,s) => t + s.lines.reduce((x,l) => x + lineCost(l), 0), 0));
+}
+function collectedOf(c){ return cashbook.find(e => e.kind === 'collect' && e.closeTs === c.ts); }
+function cashPending(){                              // recent closes whose cash was never collected
+  const cut = dstr(new Date(Date.now() - 7*86400000));
+  return closes.filter(c => c.date >= cut && !collectedOf(c));
+}
+function startCollect(closeTs){
+  const c = closes.find(x => x.ts === closeTs); if (!c || collectedOf(c)) return;
+  const counted = round2(c.actual.Cash||0);
+  let left = Math.max(0, round2(counted - (c.float||0)));
+  const want = [['Restock', closeCogs(c)], ['Rent & utilities', round2(rentShare())],
+                ['Overheads', round2(ovhShare())], ['Loan', round2(loanShare())]];
+  const alloc = {};                                  // waterfall: fill in priority order until the cash runs out
+  for (const [k, w] of want){
+    const a = round2(Math.min(left, Math.max(0, w)));
+    alloc[k] = String(a); left = round2(left - a);
+  }
+  cbDraft = {closeTs, leave:String(c.float||0), alloc, note:''};
+  render();
+}
+function cbCalc(){
+  const c = closes.find(x => x.ts === cbDraft.closeTs) || {actual:{Cash:0}};
+  const counted = round2(c.actual.Cash||0);
+  const leave = round2(parseFloat(cbDraft.leave)||0);
+  const collected = round2(counted - leave);
+  const sums = {}; let allocT = 0;
+  for (const e of ENVS.slice(0,4)){
+    const v = round2(parseFloat(cbDraft.alloc[e.name])||0);
+    sums[e.name] = v; allocT = round2(allocT + v);
+  }
+  return {c, counted, leave, collected, sums, allocT, profit:round2(collected - allocT)};
+}
+function cbSumText(){
+  const {counted, leave, collected, allocT, profit} = cbCalc();
+  if (leave > counted + 0.001)
+    return '<b style="color:var(--red)">You cannot leave more than the '+fmt(counted)+' counted.</b>';
+  return 'Take out <b>'+fmt(collected)+'</b> · envelopes '+fmt(allocT)+' · '+
+    (profit < -0.001
+      ? '<b style="color:var(--red)">over-allocated by '+fmt(-profit)+' — reduce an envelope</b>'
+      : '💰 Profit set aside gets <b>'+fmt(profit)+'</b>');
+}
+function cbSum(){ const el = document.getElementById('cb-sum'); if (el) el.innerHTML = cbSumText(); }
+function cbCollectView(){
+  const {c, counted} = cbCalc();
+  const rows = ENVS.slice(0,4).map(e =>
+    `<div class="itemrow">
+      <span style="flex:2;font-size:14px">${e.emoji} ${e.name}</span>
+      <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="0.00"
+             value="${esc(cbDraft.alloc[e.name])}"
+             onchange="cbDraft.alloc['${e.name}']=this.value;cbSum()">
+    </div>`).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Collect the cash — close of ${c.date} ${c.time}</b>
+      <div class="salecard" style="border-left:4px solid var(--green);margin:8px 0">
+        <b>Cash counted at that close: ${fmt(counted)}</b>
+        <div class="lines">Float declared that morning: ${fmt(c.float||0)}. EcoCash and swipe money is
+          on the statements — this book tracks the notes and coins only.</div></div>
+      <div class="itemrow lab"><span>leave in the drawer as tomorrow's float $</span></div>
+      <div class="itemrow">
+        <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="0.00"
+               value="${esc(cbDraft.leave)}" onchange="cbDraft.leave=this.value;cbSum()"></div>
+      <div class="itemrow lab" style="margin-top:6px"><span>split what you take into the envelopes</span></div>
+      ${rows}
+      <div id="cb-sum" class="note">${cbSumText()}</div>
+      <div class="note">Guide for this day: cost of sold ${fmt(closeCogs(c))}, rent &amp; utilities
+        ${fmt(round2(rentShare()))}/day, overheads ${fmt(round2(ovhShare()))}/day, loan
+        ${fmt(round2(loanShare()))}/day. The suggested split feeds the envelopes in that order until
+        the cash runs out — change any figure; whatever remains goes to Profit set aside by itself.</div>
+      <div class="itemrow" style="margin-bottom:0">
+        <input style="flex:1" placeholder="Note (optional)" value="${esc(cbDraft.note)}"
+               onchange="cbDraft.note=this.value"></div>
+      <button class="bigbtn" onclick="doCollect()">COLLECT &amp; LOCK THE SPLIT</button>
+      <button class="bigbtn grey" onclick="cbDraft=null;render()">Cancel</button>
+    </div>`;
+}
+function doCollect(){
+  if (cbDraft && cbDraft._done){ toast('This collection is already saved', true); return; }
+  const {c, counted, leave, collected, sums, profit} = cbCalc();
+  if (!c.ts){ toast('That close is gone', true); cbDraft = null; render(); return; }
+  if (leave < 0){ toast('The float left cannot be negative', true); return; }
+  if (leave > counted + 0.001){ toast('You cannot leave more than the '+fmt(counted)+' counted', true); return; }
+  if (Object.values(sums).some(v => v < 0)){ toast('Envelope amounts cannot be negative', true); return; }
+  if (profit < -0.001){ toast('Envelopes hold '+fmt(-profit)+' more than you collected — reduce one', true); return; }
+  ask('Collect '+fmt(collected)+' from the '+c.date+' close and lock the split? '+fmt(leave)+
+      ' stays in the drawer as tomorrow\'s float.', () => {
+    const alloc = {...sums, 'Profit set aside': profit};
+    for (const k in alloc) envs[k] = round2((envs[k]||0) + alloc[k]);
+    cashbook.push({id:Date.now(), ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+      kind:'collect', closeTs:c.ts, closeDate:c.date, counted, left:leave, collected, alloc,
+      note:String(cbDraft.note||'').trim()});
+    logAudit('cash-collect', fmt(collected)+' collected from the '+c.date+' close, '+fmt(leave)+
+      ' left as float — '+ENVS.map(e=>e.name+' '+fmt(alloc[e.name]||0)).join(', '));
+    cbDraft._done = true; cbDraft = null; save(); render();
+    toast('Collected — envelopes updated');
+  }, 'COLLECT', 'var(--green)');
+}
+function cbSpendView(){
+  const d = cbSpendDraft;
+  const opts = ENVS.map(e =>
+    `<option${d.env===e.name?' selected':''}>${e.name}</option>`).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Spend from an envelope</b>
+      <div class="note" style="margin-top:4px">The <b>${esc(d.env)}</b> envelope holds
+        <b>${fmt(envBal(d.env))}</b>. Restock money buys stock (supplier payments can draw from it
+        directly on the payment form); rent, overheads and the loan get paid out of theirs when the
+        bill comes; profit leaves here when you bank it.</div>
+      <div class="itemrow lab" style="margin-top:8px"><span style="flex:1">envelope</span><span style="flex:1">amount $</span></div>
+      <div class="itemrow">
+        <select style="flex:1" onchange="cbSpendDraft.env=this.value;render()">${opts}</select>
+        <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="0.00"
+               value="${esc(d.amt)}" onchange="cbSpendDraft.amt=this.value">
+      </div>
+      <div class="itemrow" style="margin-bottom:0">
+        <input style="flex:1" placeholder="What for (required — e.g. rent for July, banked)"
+               value="${esc(d.what)}" onchange="cbSpendDraft.what=this.value"></div>
+      <button class="bigbtn" onclick="doCbSpend()">RECORD THE SPEND</button>
+      <button class="bigbtn grey" onclick="cbSpendDraft=null;render()">Cancel</button>
+    </div>`;
+}
+function doCbSpend(){
+  const d = cbSpendDraft;
+  const amt = round2(parseFloat(d.amt)||0);
+  if (!(amt > 0)){ toast('Enter the amount', true); return; }
+  const what = String(d.what||'').trim();
+  if (!what){ toast('Say what the money is for', true); return; }
+  const bal = envBal(d.env);
+  const go = () => {
+    envs[d.env] = round2(bal - amt);
+    cashbook.push({id:Date.now(), ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+      kind:'spend', env:d.env, amt, what});
+    logAudit('cash-spend', fmt(amt)+' from the '+d.env+' envelope — '+what);
+    cbSpendDraft = null; save(); render(); toast('Spent from '+d.env);
+  };
+  if (amt > bal + 0.001)
+    ask('The '+d.env+' envelope only holds '+fmt(bal)+'. Record '+fmt(amt)+' anyway? The envelope goes '+
+        'negative until it is fed again.', go, 'RECORD', 'var(--green)');
+  else go();
+}
+function cbEnvView(){
+  const e = ENVS.find(x => x.name === cbSel) || {name:cbSel, color:'#607d8b', emoji:'', hint:''};
+  const bal = envBal(cbSel);
+  const rows = [...cashbook].reverse()
+    .filter(x => x.kind === 'spend' ? x.env === cbSel : (x.alloc && (x.alloc[cbSel]||0) > 0.001))
+    .slice(0,30).map(x => x.kind === 'collect'
+      ? `<div class="salecard"><div class="top"><span>${x.date} · fed from the ${x.closeDate} close</span>
+          <span style="color:var(--greend)">+${fmt(x.alloc[cbSel]||0)}</span></div></div>`
+      : `<div class="salecard"><div class="top"><span>${x.date} ${x.time} · spent</span>
+          <span style="color:var(--red)">−${fmt(x.amt)}</span></div>
+         <div class="lines">${esc(x.what)}</div></div>`).join('');
+  return `<div class="hero"><span>${e.emoji} ${esc(e.name)}</span>
+      <b style="color:${bal<-0.001?'var(--red)':e.color}">${fmt(bal)}</b><span>${esc(e.hint)}</span></div>
+    <button class="bigbtn" onclick="cbSpendDraft={env:'${esc(e.name)}',amt:'',what:''};render()">− SPEND FROM THIS ENVELOPE</button>
+    <button class="bigbtn grey" onclick="cbSel=null;render()">‹ All envelopes</button>
+    ${rows || '<div class="note">No movements yet.</div>'}`;
+}
+function cashbookView(){
+  if (cbDraft) return cbCollectView();
+  if (cbSpendDraft) return cbSpendView();
+  if (cbSel) return cbEnvView();
+  const pending = cashPending().slice().reverse().map(c => {
+    const take = Math.max(0, round2((c.actual.Cash||0) - (c.float||0)));
+    return `<div class="salecard" style="border-left:4px solid #fb8c00">
+      <div class="top"><span>Close of ${c.date} ${c.time}</span><span>${fmt(c.actual.Cash||0)} cash counted</span></div>
+      <div class="lines">Leave the ${fmt(c.float||0)} float → about ${fmt(take)} to collect and split.</div>
+      <button class="bigbtn" style="margin-top:8px" onclick="startCollect(${c.ts})">COLLECT &amp; SPLIT INTO ENVELOPES</button>
+    </div>`; }).join('');
+  const cards = ENVS.map(e =>
+    `<div class="salecard" style="border-left:4px solid ${e.color}" onclick="cbSel='${e.name}';render()">
+      <div class="top"><span>${e.emoji} ${e.name}</span>
+        <b style="color:${envBal(e.name)<-0.001?'var(--red)':e.color}">${fmt(envBal(e.name))}</b></div>
+      <div class="lines">${esc(e.hint)} · tap for history</div>
+    </div>`).join('');
+  const recent = [...cashbook].reverse().slice(0,8).map(e => e.kind === 'collect'
+    ? `<div class="salecard"><div class="top"><span>${e.date} · collected</span>
+        <span style="color:var(--greend)">+${fmt(e.collected)}</span></div>
+       <div class="lines">from the ${e.closeDate} close · ${fmt(e.left)} left as float ·
+         ${ENVS.filter(v=>(e.alloc[v.name]||0)>0.001).map(v=>v.name+' '+fmt(e.alloc[v.name])).join(', ')||'nothing allocated'}${e.note?' · '+esc(e.note):''}</div></div>`
+    : `<div class="salecard"><div class="top"><span>${e.date} · ${esc(e.env)}</span>
+        <span style="color:var(--red)">−${fmt(e.amt)}</span></div>
+       <div class="lines">${esc(e.what)}</div></div>`).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Cash Book — where the till cash goes</b>
+      <div class="note" style="margin-top:6px">The after-close ritual: collect the cash (leave tomorrow's
+        float in the drawer) and split it into envelopes — <b>Restock</b> gets the day's cost of sold so
+        the meat can be bought back, rent, overheads and the loan get their daily share, and whatever is
+        left is <b>profit, set aside</b>. Envelopes keep a running balance until spent out. Cash in
+        envelopes now: <b>${fmt(envTotal())}</b>.</div>
+      <button class="bigbtn grey" onclick="cbSpendDraft={env:'Restock',amt:'',what:''};render()">− SPEND FROM AN ENVELOPE</button>
+    </div>
+    ${pending}
+    ${cards}
+    ${recent ? '<div class="note" style="margin:10px 0 2px">Recent movements</div>'+recent : ''}`;
 }
 function auditView(){
   const cards = [...audit].reverse().slice(0,100).map(a =>
@@ -2356,8 +2620,8 @@ function settingsView(){
       </div>
       <button class="bigbtn" onclick="archiveMonth()">DOWNLOAD MONTH PACK</button>
       <button class="bigbtn grey" onclick="pruneOld()">Clear records older than selected month</button>
-      <div class="note">Month-end routine: download the pack (7 CSVs + 1 JSON — allow multiple
-        downloads when Chrome asks) and save all eight files to Google Drive. That folder is the
+      <div class="note">Month-end routine: download the pack (8 CSVs + 1 JSON — allow multiple
+        downloads when Chrome asks) and save all nine files to Google Drive. That folder is the
         VAT / tax record base for the PBC. Then clear old months to keep the phone light —
         products, current stock and the audit log are never cleared, and the newest close is
         always kept.</div>
@@ -2427,7 +2691,7 @@ function changeSupPin(){ pinAsk('Enter NEW supervisor PIN', p1 =>
       toast('That is the owner PIN — pick another', true); return; }
     localStorage.setItem('mc_pin_sup', p1); toast('Supervisor PIN changed');
   })); }
-function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, suppliers, payments, audit, closes, opens, batches, adjustments, debtors, debtorPays}),
+function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, suppliers, payments, audit, closes, opens, batches, adjustments, debtors, debtorPays, cashbook, envs}),
   'meat-pos-backup-'+today()+'.json', 'application/json'); }
 // ---------------- month-end archive & prune ----------------
 function archiveMonth(){
@@ -2435,8 +2699,9 @@ function archiveMonth(){
   const inM = x => x.date && x.date.startsWith(m);
   const S = sales.filter(inM), D = deliveries.filter(inM),
         B = batches.filter(inM), C = closes.filter(inM), A = adjustments.filter(inM),
-        P = payments.filter(inM), O = opens.filter(inM), DP = debtorPays.filter(inM);
-  if (!S.length && !D.length && !B.length && !C.length && !A.length && !P.length && !O.length && !DP.length){
+        P = payments.filter(inM), O = opens.filter(inM), DP = debtorPays.filter(inM),
+        CB = cashbook.filter(inM);
+  if (!S.length && !D.length && !B.length && !C.length && !A.length && !P.length && !O.length && !DP.length && !CB.length){
     toast('Nothing recorded in '+m, true); return; }
   const q = v => /[",\n]/.test(String(v)) ? '"'+String(v).replace(/"/g,'""')+'"' : String(v);
   const csvOf = rows => rows.map(r => r.map(q).join(',')).join('\n');
@@ -2477,31 +2742,41 @@ function archiveMonth(){
       ['Date','Time','Product','Location','From kg','To kg','Change kg','Cost/unit','Value at cost','Reason'],
       ...A.map(a => [a.date, a.time, a.name, a.loc||'', a.from.toFixed(3), a.to.toFixed(3), a.delta.toFixed(3),
         (a.cost||0).toFixed(2), round2(a.delta*(a.cost||0)).toFixed(2), a.reason||''])])],
-    ['archive-'+m+'.json', JSON.stringify({month:m, exported:today(), products, suppliers, debtors,
-      sales:S, deliveries:D, batches:B, closes:C, opens:O, adjustments:A, payments:P, debtorPays:DP})]
+    ['cash-book-'+m+'.csv', csvOf([
+      ['Date','Time','Entry','Close date','Counted','Left as float','Collected','Restock','Rent & utilities','Overheads','Loan','Profit set aside','Envelope','Spent','What for','Note'],
+      ...CB.map(e => e.kind === 'collect'
+        ? [e.date, e.time, 'collect', e.closeDate||'', e.counted.toFixed(2), e.left.toFixed(2), e.collected.toFixed(2),
+           (e.alloc['Restock']||0).toFixed(2), (e.alloc['Rent & utilities']||0).toFixed(2),
+           (e.alloc['Overheads']||0).toFixed(2), (e.alloc['Loan']||0).toFixed(2),
+           (e.alloc['Profit set aside']||0).toFixed(2), '', '', '', e.note||'']
+        : [e.date, e.time, 'spend', '', '', '', '', '', '', '', '', '', e.env, e.amt.toFixed(2), e.what||'', ''])])],
+    ['archive-'+m+'.json', JSON.stringify({month:m, exported:today(), products, suppliers, debtors, envs,
+      sales:S, deliveries:D, batches:B, closes:C, opens:O, adjustments:A, payments:P, debtorPays:DP, cashbook:CB})]
   ];
   files.forEach(([name, data], i) => setTimeout(() =>
     dl(data, name, name.endsWith('.json')?'application/json':'text/csv'), i*400));
   logAudit('archive', m+' pack exported ('+S.length+' sales, '+D.length+' deliveries, '+
-    P.length+' payments, '+DP.length+' debtor payments, '+B.length+' batches, '+C.length+' closes, '+A.length+' adjustments)');
+    P.length+' payments, '+DP.length+' debtor payments, '+CB.length+' cash book entries, '+
+    B.length+' batches, '+C.length+' closes, '+A.length+' adjustments)');
   save(); cloudBackup(true, true);
-  toast('Month pack downloading — save all 8 files to Drive');
+  toast('Month pack downloading — save all 9 files to Drive');
 }
 function pruneOld(){
   const m = (document.getElementById('arc-m')||{}).value || today().slice(0,7);
   const cut = m + '-01';
   const lastClose = closes[closes.length-1];
   const lastOpen = opens[opens.length-1];
-  const n = [sales, deliveries, batches, closes, adjustments, payments, opens, debtorPays]
+  const n = [sales, deliveries, batches, closes, adjustments, payments, opens, debtorPays, cashbook]
     .reduce((s,arr) => s + arr.filter(x => x.date < cut).length, 0);
   if (!n){ toast('Nothing older than '+m+' to clear', true); return; }
-  ask('Delete '+n+' records dated before '+cut+'? Only do this AFTER downloading their month packs to Drive. Products, suppliers, debtors, stock and the audit log are kept.', () => {
+  ask('Delete '+n+' records dated before '+cut+'? Only do this AFTER downloading their month packs to Drive. Products, suppliers, debtors, stock, envelope balances and the audit log are kept.', () => {
     // keep any account sale still owed money even if old, so the debt is never lost
     sales = sales.filter(x => x.date >= cut || (x.pay === 'Account' && !x.void && acctOutstanding(x) > 0.001));
     // keep any delivery still owed money even if old, so the debt is never lost
     deliveries = deliveries.filter(x => x.date >= cut || outstanding(x) > 0.001);
     payments = payments.filter(x => x.date >= cut);
     debtorPays = debtorPays.filter(x => x.date >= cut);
+    cashbook = cashbook.filter(x => x.date >= cut);   // envelope balances live in mc_envs — unaffected
     batches = batches.filter(x => x.date >= cut);
     adjustments = adjustments.filter(x => x.date >= cut);
     closes = closes.filter(x => x.date >= cut || x === lastClose);  // keep the newest close: it anchors the next till window
@@ -2523,6 +2798,8 @@ function applyBackup(d){
   if (Array.isArray(d.adjustments)) adjustments = d.adjustments;
   if (Array.isArray(d.debtors)) debtors = d.debtors;
   if (Array.isArray(d.debtorPays)) debtorPays = d.debtorPays;
+  if (Array.isArray(d.cashbook)) cashbook = d.cashbook;
+  if (d.envs && typeof d.envs === 'object') envs = d.envs;
 }
 function restore(){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json';
   inp.onchange = () => { const f = inp.files[0]; if (!f) return;
@@ -2544,12 +2821,13 @@ function clearData(full){
       () => {
         if (full){ localStorage.clear(); location.reload(); return; }
         sales = []; deliveries = []; suppliers = []; payments = []; batches = []; closes = []; opens = []; adjustments = []; audit = [];
-        debtors = []; debtorPays = [];
+        debtors = []; debtorPays = []; cashbook = []; envs = {};
         for (const p of products){ p.freezer = 0; p.chiller = 0; }
         ticket = []; closeDraft = null; cutDraft = null; closeStep = 'start'; viewTs = null;
         openDraft = null; openStep = 'start'; openViewTs = null;
         issueDraft = null; ftakeDraft = null; ftakeLast = null;
         debSel = null; debPayDraft = null; debEditDraft = null; acctPick = null;
+        cbSel = null; cbDraft = null; cbSpendDraft = null;
         logAudit('reset', 'test data cleared — all records wiped, stock zeroed, products & settings kept');
         save(); render(); toast('Cleared — ready for real trading');
       });
@@ -2642,7 +2920,7 @@ function cloudBackup(force, quiet){
   const slot = cloudSlot();
   const body = JSON.stringify({cloud:1, exported:today(), ts:Date.now(),
     products, sales, shop, deliveries, suppliers, payments, audit, closes, opens,
-    batches, adjustments, debtors, debtorPays});
+    batches, adjustments, debtors, debtorPays, cashbook, envs});
   const meta = {date:today(), time:new Date().toTimeString().slice(0,5), ts:Date.now(),
     sales:sales.length, closes:closes.length, kb:Math.round(body.length/1024)};
   fetch(relayUrl('backup/' + slot), {method:'PUT', body})
