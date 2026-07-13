@@ -105,11 +105,22 @@ Change both PINs in **Settings** on day one (owner only). The two PINs can't be 
     counts and any shortfall is logged as a **write-off at cost** (shows in Reports).
   Sales, voids and the daily Close touch the **chiller only**; corrections go through the
   stock button on **Items** (pick freezer or chiller, reason required, logged).
+- **Open Day** — the morning ritual, ~2 minutes: name **who is opening** (they own the till
+  and chiller until the evening count), count the **float** physically in the drawer (on
+  record, so the evening reconciliation stops relying on a number in someone's head), and
+  optionally **spot-check any chiller lines blind** — a counted line is compared with what
+  last night's close locked in, so an overnight loss surfaces at opening, attributed to
+  whoever had access overnight, instead of polluting the day's variance. Notes field for
+  anything unusual ("power off overnight"). The record locks like a close; past opens are
+  listed with red edges where a spot-check flagged. It also warns if yesterday was never
+  closed. Selling before the day is opened prompts once ("sell anyway?" — never blocks a
+  queue) and the skip is written to the audit log; the SELL screen shows a small reminder.
 - **Close** — the evening ritual, ~10 minutes: **blind chiller count** (weigh every line
   on the sales counter and enter the scale figure — the app hides what it expects, so the
   count is a measurement, not a confirmation; the freezer is counted weekly, separately),
-  then **count the money** (till cash excluding any
-  float, EcoCash, swipe) and list any **cash paid out of the till** that day (gas, bags,
+  then **count the money** (till cash — with a float declared at Open Day the app says
+  "count everything, float included" and expects float + takings; without one, count
+  excluding the float as before — plus EcoCash and swipe) and list any **cash paid out of the till** that day (gas, bags,
   casual labour — each needs a reason). Only after saving does the app reveal the
   variances: per-line count-vs-expected in kg and $, and the till gap per payment
   method — with cash pay-outs added back so a legitimate expense never reads as a
