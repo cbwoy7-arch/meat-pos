@@ -65,6 +65,9 @@
   .p-cash { background:linear-gradient(150deg, #86bc4e, var(--greend)); }
   .p-eco { background:linear-gradient(150deg, #2b95ea, #1668b8); }
   .p-swipe { background:linear-gradient(150deg, #6a41c0, #4d2a97); }
+  .p-acct { width:100%; margin-top:8px; padding:13px 0; border:0; border-radius:12px; color:#fff;
+            font-size:14px; font-weight:700; box-shadow:var(--sh);
+            background:linear-gradient(150deg, #94433a, #6a241d); }
   /* qty modal, generic modal */
   .overlay { position:fixed; inset:0; background:rgba(17,27,34,.5); display:none;
              align-items:flex-end; justify-content:center; z-index:10;
@@ -385,6 +388,9 @@ let adjustments = load('mc_adjust', []);   // valued stock write-offs / correcti
 let cutDraft = null;
 let issueDraft = null, ftakeDraft = null, ftakeLast = null;   // freezer→chiller issue + weekly freezer stock-take
 let supSel = null, supPayDraft = null, supEditDraft = null;   // supplier accounts: open statement / payment form / edit
+let debtors = load('mc_debtors', []);               // customer credit book {name, phone, note}
+let debtorPays = load('mc_debtorPays', []);         // payments received {id, ts, date, time, debtor, amt, method, note, alloc, credit, closedTs}
+let debSel = null, debPayDraft = null, debEditDraft = null, acctPick = null;   // debtors UI state
 let shop = load('mc_shop', { name:'Meat Centre', line2:'', footer:'Thank you, come again!',
                              printer:'off', auto:false, tolKg:0.2, tolTill:0.02 });
 if (shop.tolKg == null) shop.tolKg = 0.2;      // count tolerance per line
@@ -410,7 +416,10 @@ function save(){ localStorage.setItem('mc_products', JSON.stringify(products));
                  localStorage.setItem('mc_closes', JSON.stringify(closes));
                  localStorage.setItem('mc_opens', JSON.stringify(opens));
                  localStorage.setItem('mc_batches', JSON.stringify(batches));
-                 localStorage.setItem('mc_adjust', JSON.stringify(adjustments)); syncPush(); }
+                 localStorage.setItem('mc_adjust', JSON.stringify(adjustments));
+                 localStorage.setItem('mc_debtors', JSON.stringify(debtors));
+                 localStorage.setItem('mc_debtorPays', JSON.stringify(debtorPays));
+                 syncPush(); maybeCloudBackup(); }
 function logAudit(type, detail, who){
   const e = {date:today(), time:new Date().toTimeString().slice(0,5), type, detail};
   if (who) e.who = who;
@@ -454,6 +463,7 @@ function render(){
   if (tab === 'sell'){
     if (view === 'cats'){ hdr.textContent = 'Meat Centre POS'; m.innerHTML = catsView(); }
     else if (view === 'items'){ hdr.innerHTML = `<span class="back" onclick="view='cats';render()">‹</span> ${esc(selCat)}`; m.innerHTML = itemsGrid(); }
+    else if (view === 'acct'){ hdr.innerHTML = `<span class="back" onclick="view='charge';render()">‹</span> On account`; m.innerHTML = acctView(); }
     else { hdr.innerHTML = `<span class="back" onclick="view='items';render()">‹</span> Ticket`; m.innerHTML = chargeView(); }
   } else {
     const cur = navSnapshot();                       // record where we were, so the header ‹ can step back
@@ -471,18 +481,20 @@ function render(){
 // ---- back-office navigation history (header ‹ = previous opened screen) ----
 let navStack = [], navLast = null, navRestoring = false;
 function navSnapshot(){ return {office, supSel, supPayDraft, supEditDraft, cutDraft, issueDraft,
-  ftakeDraft, ftakeLast, closeStep, viewTs, openStep, openViewTs, repSec, repAll}; }
+  ftakeDraft, ftakeLast, closeStep, viewTs, openStep, openViewTs, repSec, repAll,
+  debSel, debPayDraft, debEditDraft}; }
 function navKey(s){ return JSON.stringify([s.office, s.supSel, !!s.supPayDraft, !!s.supEditDraft,
   !!s.cutDraft, !!s.issueDraft, !!s.ftakeDraft, !!s.ftakeLast, s.closeStep, s.viewTs,
-  s.openStep, s.openViewTs, s.repSec, !!s.repAll]); }
+  s.openStep, s.openViewTs, s.repSec, !!s.repAll, s.debSel, !!s.debPayDraft, !!s.debEditDraft]); }
 function officeBack(){ const s = navStack.pop(); if (!s) return; navRestoring = true;
   office = s.office; supSel = s.supSel; supPayDraft = s.supPayDraft; supEditDraft = s.supEditDraft;
   cutDraft = s.cutDraft; issueDraft = s.issueDraft; ftakeDraft = s.ftakeDraft; ftakeLast = s.ftakeLast;
   closeStep = s.closeStep; viewTs = s.viewTs; openStep = s.openStep; openViewTs = s.openViewTs;
-  repSec = s.repSec; repAll = s.repAll; render(); }
+  repSec = s.repSec; repAll = s.repAll;
+  debSel = s.debSel; debPayDraft = s.debPayDraft; debEditDraft = s.debEditDraft; render(); }
 function tbar(){ const b = document.getElementById('tbar');
   const total = ticket.reduce((s,l)=>s+l.amt,0);
-  const show = tab==='sell' && view!=='charge' && ticket.length;
+  const show = tab==='sell' && view!=='charge' && view!=='acct' && ticket.length;
   b.style.display = show ? 'flex' : 'none';
   if (show) b.innerHTML = `<span>${ticket.length} item${ticket.length>1?'s':''}</span><span>CHARGE ${fmt(total)} ›</span>`;
 }
@@ -514,8 +526,10 @@ function chargeView(){
         <button class="p-cash" onclick="pay('Cash')">CASH</button>
         <button class="p-eco" onclick="pay('EcoCash')">ECOCASH</button>
         <button class="p-swipe" onclick="pay('Swipe')">SWIPE</button>
-      </div></div>
-    <div class="note">Take the money / confirm the EcoCash or swipe approval BEFORE pressing the button.</div>`;
+      </div>
+      <button class="p-acct" onclick="acctStart()">🔒 ON ACCOUNT — owner PIN</button></div>
+    <div class="note">Take the money / confirm the EcoCash or swipe approval BEFORE pressing the button.
+      On account = the customer takes the meat now and owes the shop — only the owner's PIN can authorise it.</div>`;
 }
 // selling is chiller-only: an empty chiller line blocks the sale and points at the fix
 function chillerAvail(p){
@@ -593,7 +607,8 @@ function pay(how){ if (!ticket.length) return;
 }
 function showDone(total, how){
   document.getElementById('d-amt').textContent = fmt(total);
-  document.getElementById('d-how').textContent = how + ' payment received';
+  document.getElementById('d-how').textContent =
+    /^(Cash|EcoCash|Swipe)$/.test(how) ? how + ' payment received' : how;
   document.getElementById('done').classList.add('open');
   try { navigator.vibrate && navigator.vibrate(150); } catch(e){}
   try { const ac = new (window.AudioContext||window.webkitAudioContext)();
@@ -604,6 +619,75 @@ function showDone(total, how){
   clearTimeout(showDone._h); showDone._h = setTimeout(hideDone, 4000);
 }
 function hideDone(){ document.getElementById('done').classList.remove('open'); }
+
+// ---------------- ON ACCOUNT (credit sale — owner PIN only) ----------------
+function acctStart(){
+  if (!ticket.length) return;
+  if (!openedToday() && localStorage.getItem('mc_gateAck') !== today()){
+    ask('The day has not been opened — no float declared, no opener named (Back Office → Open Day). Sell anyway? This is noted in the audit log.',
+      () => { localStorage.setItem('mc_gateAck', today());
+              logAudit('open-skipped', 'selling started before the day was opened');
+              acctStart(); }, 'SELL ANYWAY');
+    return;
+  }
+  pinAsk('Owner PIN — authorise credit', pin => {
+    if (pin === (localStorage.getItem('mc_pin') || '2026')){
+      acctPick = {name:'', phone:''}; view = 'acct'; render();
+    } else if (pin === (localStorage.getItem('mc_pin_sup') || '1234')){
+      logAudit('credit-refused', 'supervisor PIN tried to authorise a credit sale of '+
+        fmt(round2(ticket.reduce((s,l)=>s+l.amt,0))));
+      toast('Owner PIN only — the supervisor cannot authorise credit', true);
+    } else toast('Wrong PIN', true);
+  });
+}
+function acctView(){
+  const total = round2(ticket.reduce((s,l)=>s+l.amt,0));
+  const known = [...debtors].sort((a,b) => a.name.localeCompare(b.name)).map(d => {
+    const bal = owedByDebtor(d.name);
+    return `<div class="salecard" onclick="doAcctSale('${esc(d.name).replace(/'/g,"\\'")}')">
+      <div class="top"><span>${esc(d.name)}</span>
+        <span${bal>0.001?' style="color:#fb8c00"':' style="color:var(--greend)"'}>${bal>0.001?'owes '+fmt(bal):'clear'}</span></div>
+      <div class="lines">${d.phone?'☎ '+esc(d.phone)+' · ':''}tap to put ${fmt(total)} on this account</div>
+    </div>`; }).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Put ${fmt(total)} on account — authorised by owner</b>
+      <div class="note" style="margin-top:6px">The customer takes the goods now and owes the shop.
+        The sale counts as revenue but NO money is expected in tonight's till for it. Pick the
+        customer below, or add a new one.</div>
+      <div class="itemrow lab" style="margin-top:8px"><span style="flex:1.6">new customer name</span><span style="flex:1">phone</span></div>
+      <div class="itemrow" style="margin-bottom:0">
+        <input style="flex:1.6" placeholder="name" value="${esc(acctPick.name)}" onchange="acctPick.name=this.value">
+        <input style="flex:1" placeholder="07…" value="${esc(acctPick.phone)}" onchange="acctPick.phone=this.value">
+      </div>
+      <button class="bigbtn" style="background:linear-gradient(150deg,#94433a,#6a241d)"
+              onclick="doAcctSale(null)">PUT ON NEW CUSTOMER'S ACCOUNT</button>
+      <button class="bigbtn grey" onclick="acctPick=null;view='charge';render()">‹ Back to payment</button>
+    </div>
+    ${known || '<div class="note">No account customers yet — add the first one above.</div>'}`;
+}
+function doAcctSale(name){
+  if (!ticket.length) return;
+  let phone = '';
+  if (!name){
+    name = String(acctPick.name||'').trim(); phone = String(acctPick.phone||'').trim();
+    if (!name){ toast('Enter the customer name', true); return; }
+  }
+  const total = round2(ticket.reduce((s,l)=>s+l.amt,0));
+  const after = round2(owedByDebtor(name) + total);
+  ask('Put '+fmt(total)+' on '+name+"'s account? They will owe "+fmt(after)+' after this. The sale locks like any other.', () => {
+    ensureDebtor(name, phone);
+    const rec = {id:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+                 lines:ticket, pay:'Account', debtor:name, acctPay:0, total, void:false};
+    sales.push(rec); lastSaleId = rec.id;
+    for (const l of rec.lines){ const p = products.find(x => x.name === l.name);
+      if (p) p.chiller = round3((p.chiller||0) - l.kg); }
+    logAudit('credit-sale', fmt(total)+' to '+name+' on account (owner PIN authorised) — '+
+      rec.lines.map(l=>l.name+' '+l.kg.toFixed(3)).join(', '));
+    ticket = []; view = 'cats'; acctPick = null; save(); render();
+    showDone(total, 'On account — '+name);
+    if (shop.auto && shop.printer !== 'off') printSale(rec.id);
+  }, 'ON ACCOUNT', '#7a2b24');
+}
 
 // ---------------- receipts & printing ----------------
 const RW = 32;                                   // characters per line on a 58 mm printer
@@ -625,7 +709,7 @@ function receiptText(s){
   }
   L.push(div);
   L.push(rPad('TOTAL', fmt(s.total)));
-  L.push('Paid: ' + s.pay + (s.void ? '  ** VOIDED **' : ''));
+  L.push('Paid: ' + s.pay + (s.debtor ? ' — ' + s.debtor : '') + (s.void ? '  ** VOIDED **' : ''));
   L.push(div);
   if (shop.footer) L.push(rCenter(shop.footer));
   return L.join('\n');
@@ -767,6 +851,7 @@ function officeView(){
     <button class="${['goods','suppliers'].includes(office)?'on':''}" onclick="office='goods';render()">Goods In</button>
     <button class="${['stock','cut','issue','ftake'].includes(office)?'on':''}" onclick="office='stock';ftakeLast=null;render()">Stock${lowStock().length?' ⚠':''}</button>
     <button class="${office==='close'?'on':''}" onclick="office='close';render()">Close</button>
+    <button class="${office==='debtors'?'on':''}" onclick="office='debtors';debSel=null;debPayDraft=null;debEditDraft=null;render()">Debtors${debtTotal()>0.001?' ⚠':''}</button>
     ${role==='owner'?`<button class="${office==='reports'?'on':''}" onclick="office='reports';render()">Reports</button>`:''}
     <button class="${office==='items'?'on':''}" onclick="office='items';render()">Items</button>
     ${role==='owner'
@@ -782,6 +867,7 @@ function officeView(){
   if (office==='ftake') return sub + ftakeView();
   if (office==='open') return sub + openView();
   if (office==='close') return sub + closeView();
+  if (office==='debtors') return sub + debtorsView();
   if (office==='items') return sub + itemsAdmin();
   if (office==='audit') return sub + auditView();
   return sub + settingsView();
@@ -793,8 +879,11 @@ function lowStock(){ return products.filter(p => p.low > 0 && onHand(p) <= p.low
 // cash legitimately paid out of the till at a close, and the till gap that accounts for it.
 // c.float (declared at that day's open) means the whole drawer was counted, float included.
 function payoutOf(c){ return round2((c.payouts||[]).reduce((s,x)=>s+(parseFloat(x.amt)||0),0)); }
+// debtor money received into the day's till/statements since the last close (recorded on the close)
+function recvInOf(c, method){ return round2((c.recvIn||[])
+  .filter(x => !method || x.method === method).reduce((s,x)=>s+(x.amt||0),0)); }
 function tillGapOf(c){ return round2((c.actual.Cash+c.actual.EcoCash+c.actual.Swipe)
-  + payoutOf(c) - (c.float||0) - (c.theo.Cash+c.theo.EcoCash+c.theo.Swipe)); }
+  + payoutOf(c) - (c.float||0) - recvInOf(c) - (c.theo.Cash+c.theo.EcoCash+c.theo.Swipe)); }
 function agg(){ const m = {};
   for (const s of rangeSales()) if (!s.void)
     for (const l of s.lines){ m[l.name] = m[l.name] || {kg:0, amt:0, cogs:0};
@@ -977,9 +1066,11 @@ function reportsView(){
       <div class="kpi"><b${avgY!==null&&avgY<0.95?' style="color:var(--red)"':''}>${avgY===null?'—':(Math.round(avgY*1000)/10)+'%'}</b><span>Cutting yield (${waste.toFixed(1)} kg waste)</span></div>
       <div class="kpi"><b>${fmt(uplift)}</b><span>Cutting uplift</span></div>
       <div class="kpi"><b${owe>0?' style="color:#fb8c00"':''}>${fmt(owe)}</b><span>Owing suppliers (now)</span></div>
+      <div class="kpi" onclick="office='debtors';render()"><b${debtTotal()>0.001?' style="color:#94433a"':''}>${fmt(debtTotal())}</b><span>Owed by debtors (now)</span></div>
     </div>
-    <div class="note">From the daily closes, the cutting log and the supplier book. Anything red
-      needs an answer today — leakage is stock that left the shop without money coming in.</div>`;
+    <div class="note">From the daily closes, the cutting log, the supplier book and the debtors book.
+      Anything red needs an answer today — leakage is stock that left the shop without money coming in.
+      Debtor balances are meat already out of the door: collect them before they age.</div>`;
   }
   // Sales section
   const names = [...products.map(p=>p.name), ...Object.keys(a).filter(n=>!products.some(p=>p.name===n))];
@@ -1001,7 +1092,8 @@ function reportsView(){
     ${chartDays(byDay, beDay, dailyOvh)}
     ${chartPay([{name:'Cash', amt:round2(by('Cash')), color:'#7cb342'},
                 {name:'EcoCash', amt:round2(by('EcoCash')), color:'#1e88e5'},
-                {name:'Swipe', amt:round2(by('Swipe')), color:'#5e35b1'}])}
+                {name:'Swipe', amt:round2(by('Swipe')), color:'#5e35b1'},
+                {name:'On account', amt:round2(by('Account')), color:'#94433a'}])}
     ${chartTop(a)}
     <table><tr><th>Product</th><th class="n">Sold kg</th><th class="n">Takings $</th><th class="n">Profit $</th></tr>
       ${rows || '<tr><td colspan="4" style="color:#999">No sales in this range</td></tr>'}</table>
@@ -1012,7 +1104,12 @@ function reportsView(){
       <b>Goods In</b>; stock corrections through <b>Items → stock</b> with a reason; every
       evening ends with the <b>Close</b> tab.</div>`;
 }
-function voidSale(id){ ask('Void this sale? It stays on record but is removed from totals.', () => {
+function voidSale(id){
+  const chk = sales.find(x=>x.id===id);
+  if (chk && chk.pay === 'Account' && (chk.acctPay||0) > 0.001){
+    toast('This account sale already has '+fmt(chk.acctPay)+' paid against it — settle it in Debtors instead', true);
+    return; }
+  ask('Void this sale? It stays on record but is removed from totals.', () => {
   const s = sales.find(x=>x.id===id); if (s) { s.void = true;
     for (const l of s.lines){ const p = products.find(x => x.name === l.name);
       if (p) p.chiller = round3((p.chiller||0) + l.kg); }    // voided goods go back in the chiller
@@ -1341,6 +1438,8 @@ function closeCash(){
   const lastTs = closes.length ? closes[closes.length-1].ts : 0;
   const tillPays = payments.filter(pm => pm.fromTill && !pm.closedTs && pm.ts > lastTs);
   const tillPaySum = round2(tillPays.reduce((s,pm)=>s+pm.amt,0));
+  const debtIns = debtorPays.filter(pm => !pm.closedTs && pm.method !== 'Bank' && pm.ts > lastTs);
+  const debtInSum = round2(debtIns.reduce((s,pm)=>s+pm.amt,0));
   const op = opens.length && opens[opens.length-1].ts > lastTs ? opens[opens.length-1] : null;
   return `<div class="icard">
       <b style="font-size:15px">Step 2 of 2 — count the money</b>
@@ -1357,6 +1456,10 @@ function closeCash(){
         <b>Supplier payments from the till today: ${fmt(tillPaySum)}</b>
         <div class="lines">${tillPays.map(pm=>esc(pm.supplier)+' '+fmt(pm.amt)).join(', ')} — added to the
           pay-outs below automatically, so the till won't read short.</div></div>` : ''}
+      ${debtInSum > 0 ? `<div class="salecard" style="border-left:4px solid var(--green);margin-bottom:8px">
+        <b>Debtor payments received today: ${fmt(debtInSum)}</b>
+        <div class="lines">${debtIns.map(pm=>esc(pm.debtor)+' '+fmt(pm.amt)+' ('+esc(pm.method)+')').join(', ')} —
+          this money is EXPECTED on top of the day's takings, so it won't read as a surplus.</div></div>` : ''}
       <div class="itemrow lab"><span style="flex:1">cash in till $</span><span style="flex:1">EcoCash $</span><span style="flex:1">swipe $</span></div>
       <div class="itemrow">
         <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="0.00"
@@ -1391,7 +1494,9 @@ function doClose(){
   const lastTs = closes.length ? closes[closes.length-1].ts : 0;
   const win = sales.filter(s => !s.void && s.id > lastTs);
   const theo = {Cash:0, EcoCash:0, Swipe:0};
-  for (const s of win) theo[s.pay] = round2((theo[s.pay]||0) + s.total);
+  // account sales are revenue but bring no money to the till tonight — they are NOT in theo
+  for (const s of win) if (theo[s.pay] != null) theo[s.pay] = round2(theo[s.pay] + s.total);
+  const acctT = round2(win.filter(s => s.pay === 'Account').reduce((t,s)=>t+s.total,0));
   const lines = [];
   for (const p of products){
     if (p.raw) continue;
@@ -1416,6 +1521,11 @@ function doClose(){
   // so a legitimate cash payout never reads as a till shortage
   const tillPays = payments.filter(pm => pm.fromTill && !pm.closedTs && pm.ts > lastTs && pm.ts <= ts);
   for (const pm of tillPays){ payouts.push({amt:pm.amt, reason:'Supplier: '+pm.supplier}); pm.closedTs = ts; }
+  // debtor payments received since the last close raise what the till/statements should hold
+  // (Bank payments go straight to the owner and never touch the till)
+  const recvIns = debtorPays.filter(pm => !pm.closedTs && pm.method !== 'Bank' && pm.ts > lastTs && pm.ts <= ts);
+  const recvIn = recvIns.map(pm => ({amt:pm.amt, from:pm.debtor, method:pm.method}));
+  for (const pm of recvIns) pm.closedTs = ts;
   // who received chiller stock since the last close — the responsible person(s) for variances
   const recv = [...new Set(audit.filter(x => x.type === 'issue' && x.who &&
     new Date(x.date + 'T' + x.time).getTime() > lastTs).map(x => x.who))];
@@ -1425,11 +1535,15 @@ function doClose(){
   const c = {ts, date:today(), time:new Date().toTimeString().slice(0,5),
              lines, theo, actual, payouts, recv, note:closeDraft.note.trim(), tolKg:shop.tolKg, tolTill:shop.tolTill};
   if (op){ c.float = op.float; c.opener = op.who; }
+  if (recvIn.length) c.recvIn = recvIn;
+  if (acctT > 0) c.acct = acctT;
   closes.push(c);
   const theoT = round2(theo.Cash + theo.EcoCash + theo.Swipe);
   const missing = round2(lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
   for (const p of payouts) logAudit('cash-payout', fmt(p.amt)+' — '+p.reason);
   logAudit('close', 'till '+fmt(tillGapOf(c))+' vs takings '+fmt(theoT)+
+    (acctT?', on account '+fmt(acctT):'')+
+    (recvInOf(c)?', debtor money in '+fmt(recvInOf(c)):'')+
     (payoutOf(c)?', cash paid out '+fmt(payoutOf(c)):'')+
     ', missing stock '+fmt(Math.abs(missing))+', '+lines.length+' lines counted (stock reset to counts)'+
     (recv.length ? ' — chiller stock received by '+recv.join(', ') : ''));
@@ -1447,9 +1561,10 @@ function closeResult(){
   const missing = round2(c.lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
   const flagged = c.lines.filter(l => Math.abs(l.varKg) > tolKg).length;
   const till = ['Cash','EcoCash','Swipe'].map(m => {
-    // cash that should be IN the till = float carried in + takings − pay-outs
-    const exp = round2((c.theo[m]||0) + (m==='Cash' ? (c.float||0) - payout : 0));
-    return `<tr><td>${m}${m==='Cash'&&c.float?' (incl. $'+c.float.toFixed(2)+' float)':''}${m==='Cash'&&payout?' (less $'+payout.toFixed(2)+' out)':''}</td>
+    // money that should be IN the till/statement = float carried in + takings + debtor money − pay-outs
+    const rin = recvInOf(c, m);
+    const exp = round2((c.theo[m]||0) + rin + (m==='Cash' ? (c.float||0) - payout : 0));
+    return `<tr><td>${m}${m==='Cash'&&c.float?' (incl. $'+c.float.toFixed(2)+' float)':''}${rin?' (incl. $'+rin.toFixed(2)+' debtors)':''}${m==='Cash'&&payout?' (less $'+payout.toFixed(2)+' out)':''}</td>
      <td class="n">${fmt(exp)}</td><td class="n">${fmt(c.actual[m]||0)}</td>
      <td class="n">${fmt(round2((c.actual[m]||0)-exp))}</td></tr>`; }).join('');
   const rows = [...c.lines].sort((a,b) => Math.abs(b.varVal)-Math.abs(a.varVal)).map(l => {
@@ -1476,6 +1591,13 @@ function closeResult(){
     ${payout ? `<div class="salecard" style="border-left:4px solid #fb8c00">
       <b>Cash paid out: ${fmt(payout)}</b>
       <div class="lines">${c.payouts.map(p=>fmt(p.amt)+' — '+esc(p.reason)).join('<br>')}</div></div>` : ''}
+    ${c.acct ? `<div class="salecard" style="border-left:4px solid #94433a">
+      <b>Sold on account today: ${fmt(c.acct)}</b>
+      <div class="lines">Revenue earned but no money expected in the till for it — it sits in the
+        Debtors book until collected.</div></div>` : ''}
+    ${c.recvIn && c.recvIn.length ? `<div class="salecard" style="border-left:4px solid var(--green)">
+      <b>Debtor money received: ${fmt(recvInOf(c))}</b>
+      <div class="lines">${c.recvIn.map(x=>esc(x.from)+' '+fmt(x.amt)+' ('+esc(x.method||'Cash')+')').join('<br>')}</div></div>` : ''}
     ${c.note ? `<div class="salecard"><b>Note:</b> <span class="lines">${esc(c.note)}</span></div>` : ''}
     <div class="note">Closed ${c.date} ${c.time}. This record is locked — stock was reset to the
       counted figures. Small negatives are drip/trim loss; a pattern on the same line or the
@@ -1736,6 +1858,182 @@ function doSupEdit(){
     supSel = name;
   }
   supEditDraft = null; save(); render(); toast('Saved');
+}
+// ---------------- debtors (customer credit book) ----------------
+// mirror of the supplier book: each account sale carries acctPay (settled so far);
+// payments allocate oldest-first. Only the owner's PIN can CREATE debt (acctStart);
+// anyone can RECEIVE money against it.
+function acctOutstanding(s){ return round2(s.total - (s.acctPay||0)); }
+function acctSalesOf(name){ return sales.filter(s => !s.void && s.pay === 'Account' && s.debtor === name); }
+function owedByDebtor(name){ return round2(acctSalesOf(name).reduce((t,s) => t + acctOutstanding(s), 0)); }
+function debtTotal(){ return round2(sales.filter(s => !s.void && s.pay === 'Account')
+  .reduce((t,s) => t + acctOutstanding(s), 0)); }
+function ensureDebtor(name, phone){ name = (name||'').trim();
+  if (!name) return;
+  const d = debtors.find(x => x.name.toLowerCase() === name.toLowerCase());
+  if (!d){ debtors.push({name, phone:(phone||'').trim(), note:''}); logAudit('debtor-added', name); }
+  else if (phone && !d.phone) d.phone = phone.trim();
+}
+function oldestDebtDays(name){
+  const open = acctSalesOf(name).filter(s => acctOutstanding(s) > 0.001);
+  if (!open.length) return 0;
+  const oldest = open.reduce((m,s) => s.date < m ? s.date : m, open[0].date);
+  return Math.max(0, Math.round((new Date(today()) - new Date(oldest)) / 86400000));
+}
+function applyDebtorPay(name, amt, method, note){
+  amt = round2(amt);
+  const open = acctSalesOf(name).filter(s => acctOutstanding(s) > 0.001).sort((a,b) => a.id - b.id);
+  let left = amt;
+  const alloc = [];
+  for (const s of open){
+    if (left <= 0.001) break;
+    const take = Math.min(left, acctOutstanding(s));
+    s.acctPay = round2((s.acctPay||0) + take);
+    alloc.push({saleId:s.id, amt:round2(take)});
+    left = round2(left - take);
+  }
+  const pm = {id:Date.now(), ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
+              debtor:name, amt, method, note:(note||'').trim(), alloc,
+              credit:round2(left)};   // credit = overpayment left unallocated
+  debtorPays.push(pm);
+  logAudit('debtor-payment', fmt(amt)+' received from '+name+' by '+method+
+    (method !== 'Bank' ? ' (into today\'s till money)' : '')+(note?' — '+note:''));
+  return pm;
+}
+function debtorsView(){
+  if (debPayDraft) return debtPayView();
+  if (debEditDraft) return debtEditView();
+  if (debSel) return debtStatement();
+  const names = [...debtors.map(d => d.name)];
+  for (const s of sales) if (s.pay === 'Account' && s.debtor && !names.includes(s.debtor)) names.push(s.debtor);
+  const rows = names.map(nm => ({d: debtors.find(x=>x.name===nm) || {name:nm, phone:'', note:''},
+      bal:owedByDebtor(nm), days:oldestDebtDays(nm)}))
+    .sort((a,b) => b.bal - a.bal).map(({d,bal,days}) => {
+    const age = bal > 0.001 ? (days > 30 ? 'var(--red)' : days > 7 ? '#fb8c00' : 'var(--greend)') : 'var(--greend)';
+    return `<div class="salecard" onclick="debSel='${esc(d.name).replace(/'/g,"\\'")}';render()"
+      ${bal>0.001&&days>30?'style="border-left:4px solid var(--red)"':''}>
+      <div class="top"><span>${esc(d.name)}</span>
+        <span style="color:${age}">${bal>0.001?'owes '+fmt(bal):'clear'}</span></div>
+      <div class="lines">${d.phone?'☎ '+esc(d.phone)+' · ':''}${bal>0.001?'oldest debt '+days+' day'+(days===1?'':'s')+' · ':''}${acctSalesOf(d.name).length} credit sale${acctSalesOf(d.name).length===1?'':'s'} · tap for statement</div>
+    </div>`; }).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Debtors — meat owed to the shop</b>
+      <div class="note" style="margin-top:6px">Every customer with an account. Credit is granted at the
+        till with the <b>owner's PIN only</b>; payments can be received by anyone and land in that
+        evening's Close automatically. Amber = owing more than a week, red = more than a month.
+        Total owed to the shop now: <b>${fmt(debtTotal())}</b>.</div>
+      <button class="bigbtn grey" onclick="debEditDraft={name:'',phone:'',note:'',isNew:true};render()">+ Add a customer</button>
+    </div>
+    ${rows || '<div class="note">No debtors yet — accounts appear the first time you authorise an ON ACCOUNT sale at the till.</div>'}`;
+}
+function debtStatement(){
+  const d = debtors.find(x => x.name === debSel) || {name:debSel, phone:'', note:''};
+  const bal = owedByDebtor(debSel);
+  const days = oldestDebtDays(debSel);
+  const buys = acctSalesOf(debSel).map(s => ({kind:'sale', ts:s.id, date:s.date, s}));
+  const pays = debtorPays.filter(p => p.debtor === debSel)
+    .map(p => ({kind:'pay', ts:p.ts, date:p.date, p}));
+  const events = [...buys, ...pays].sort((a,b) => b.ts - a.ts);
+  const rows = events.map(e => e.kind === 'sale'
+    ? `<div class="salecard">
+        <div class="top"><span>${e.date} ${e.s.time} · on account</span><span style="color:var(--red)">+${fmt(e.s.total)}</span></div>
+        <div class="lines">${e.s.lines.map(l=>esc(l.name)+' '+l.kg.toFixed(3)+esc(l.unit.charAt(0))).join(', ')}${acctOutstanding(e.s)>0.001?' · <b style="color:#fb8c00">'+fmt(acctOutstanding(e.s))+' outstanding</b>':' · <span style="color:var(--greend)">settled</span>'}</div>
+      </div>`
+    : `<div class="salecard">
+        <div class="top"><span>${e.date} ${e.p.time} · payment</span><span style="color:var(--greend)">−${fmt(e.p.amt)}</span></div>
+        <div class="lines">${esc(e.p.method)}${e.p.note?' · '+esc(e.p.note):''}${e.p.credit>0.001?' · '+fmt(e.p.credit)+' credit in hand':''}</div>
+      </div>`).join('');
+  return `<div class="icard">
+      <div class="top"><b style="font-size:16px">${esc(d.name)}</b>
+        <b style="font-size:16px;color:${bal>0.001?(days>30?'var(--red)':'#fb8c00'):'var(--greend)'}">${bal>0.001?'Owes '+fmt(bal):'Clear'}</b></div>
+      ${d.phone?`<div class="note" style="margin-top:4px">☎ <a href="tel:${esc(d.phone)}" style="color:var(--greend)">${esc(d.phone)}</a>${d.note?' · '+esc(d.note):''}</div>`:d.note?`<div class="note" style="margin-top:4px">${esc(d.note)}</div>`:''}
+      ${bal>0.001&&days>7?`<div class="note" style="margin-top:4px;color:${days>30?'var(--red)':'#fb8c00'}">Oldest debt is ${days} days old${days>30?' — time to collect or stop the account':''}.</div>`:''}
+      <button class="bigbtn" onclick="debPayDraft={amt:'${bal>0.001?bal:''}',method:'Cash',note:''};render()">RECEIVE A PAYMENT</button>
+      <div class="mbtns" style="margin-top:6px">
+        <button class="cancel" onclick="debEditDraft={name:'${esc(d.name).replace(/'/g,"\\'")}',phone:'${esc(d.phone||'').replace(/'/g,"\\'")}',note:'${esc(d.note||'').replace(/'/g,"\\'")}',orig:'${esc(d.name).replace(/'/g,"\\'")}'};render()">Edit details</button>
+        <button class="cancel" onclick="debSel=null;render()">‹ All debtors</button>
+      </div>
+    </div>
+    ${rows || '<div class="note">No activity yet.</div>'}`;
+}
+function debtPayView(){
+  const bal = owedByDebtor(debSel);
+  return `<div class="icard">
+      <b style="font-size:15px">Payment from ${esc(debSel)}</b>
+      <div class="note" style="margin-top:4px">Currently owes <b>${fmt(bal)}</b>. Payment settles the
+        oldest sales first. <b>Cash goes into the till drawer</b> — tonight's Close will expect it,
+        so it never reads as a surplus. EcoCash shows on the phone statement the same way.
+        Bank = paid straight to the owner, not through the till.</div>
+      <div class="itemrow lab" style="margin-top:8px"><span style="flex:1">amount $</span><span style="flex:1">received by</span></div>
+      <div class="itemrow">
+        <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="0.00"
+               value="${esc(debPayDraft.amt)}" onchange="debPayDraft.amt=this.value">
+        <select style="flex:1" onchange="debPayDraft.method=this.value">
+          <option${debPayDraft.method==='Cash'?' selected':''}>Cash</option>
+          <option${debPayDraft.method==='EcoCash'?' selected':''}>EcoCash</option>
+          <option${debPayDraft.method==='Bank'?' selected':''}>Bank</option>
+        </select>
+      </div>
+      <div class="itemrow" style="margin-bottom:0">
+        <input style="flex:1" placeholder="Note (optional)" value="${esc(debPayDraft.note)}"
+               onchange="debPayDraft.note=this.value">
+      </div>
+      <button class="bigbtn" onclick="doDebtPay()">RECORD PAYMENT RECEIVED</button>
+      <button class="bigbtn grey" onclick="debPayDraft=null;render()">Cancel</button>
+    </div>`;
+}
+function doDebtPay(){
+  const amt = round2(parseFloat(debPayDraft.amt)||0);
+  if (!(amt > 0)){ toast('Enter the amount received', true); return; }
+  const bal = owedByDebtor(debSel);
+  const over = amt > bal + 0.001;
+  const go = () => {
+    applyDebtorPay(debSel, amt, debPayDraft.method, debPayDraft.note);
+    debPayDraft = null; save(); render();
+    toast('Payment received'+(over?' — overpayment kept as credit':''));
+  };
+  if (over) ask('That is more than the '+fmt(bal)+' owed. Record '+fmt(amt)+' anyway? The extra '+
+    fmt(round2(amt-bal))+' shows as credit in hand.', go, 'RECORD', 'var(--green)');
+  else go();
+}
+function debtEditView(){
+  const d = debEditDraft;
+  return `<div class="icard">
+      <b style="font-size:15px">${d.isNew?'Add a customer':'Edit '+esc(d.orig)}</b>
+      <div class="itemrow" style="margin-top:8px"><input style="flex:1" placeholder="Customer name"
+        value="${esc(d.name)}" onchange="debEditDraft.name=this.value"></div>
+      <div class="itemrow"><input style="flex:1" placeholder="Phone (for the reminder call)"
+        value="${esc(d.phone)}" onchange="debEditDraft.phone=this.value"></div>
+      <div class="itemrow" style="margin-bottom:0"><input style="flex:1" placeholder="Note (optional — e.g. workplace, limit)"
+        value="${esc(d.note)}" onchange="debEditDraft.note=this.value"></div>
+      <button class="bigbtn" onclick="doDebtEdit()">SAVE</button>
+      <button class="bigbtn grey" onclick="debEditDraft=null;render()">Cancel</button>
+    </div>`;
+}
+function doDebtEdit(){
+  const d = debEditDraft, name = (d.name||'').trim();
+  if (!name){ toast('Enter a name', true); return; }
+  if (d.isNew){
+    if (debtors.some(x => x.name.toLowerCase() === name.toLowerCase())){ toast('That customer already exists', true); return; }
+    debtors.push({name, phone:(d.phone||'').trim(), note:(d.note||'').trim()});
+    logAudit('debtor-added', name);
+    debSel = name;
+  } else {
+    if (name.toLowerCase() !== d.orig.toLowerCase() &&
+        debtors.some(x => x.name.toLowerCase() === name.toLowerCase())){
+      toast('Another customer already has that name', true); return; }
+    const x = debtors.find(y => y.name === d.orig);
+    if (x){
+      if (name !== d.orig){                       // rename: carry the history on sales and payments
+        for (const s of sales) if (s.pay === 'Account' && s.debtor === d.orig) s.debtor = name;
+        for (const p of debtorPays) if (p.debtor === d.orig) p.debtor = name;
+        logAudit('debtor-renamed', d.orig+' → '+name);
+      }
+      x.name = name; x.phone = (d.phone||'').trim(); x.note = (d.note||'').trim();
+    }
+    debSel = name;
+  }
+  debEditDraft = null; save(); render(); toast('Saved');
 }
 function auditView(){
   const cards = [...audit].reverse().slice(0,100).map(a =>
@@ -2058,8 +2356,8 @@ function settingsView(){
       </div>
       <button class="bigbtn" onclick="archiveMonth()">DOWNLOAD MONTH PACK</button>
       <button class="bigbtn grey" onclick="pruneOld()">Clear records older than selected month</button>
-      <div class="note">Month-end routine: download the pack (5 CSVs + 1 JSON — allow multiple
-        downloads when Chrome asks) and save all six files to Google Drive. That folder is the
+      <div class="note">Month-end routine: download the pack (7 CSVs + 1 JSON — allow multiple
+        downloads when Chrome asks) and save all eight files to Google Drive. That folder is the
         VAT / tax record base for the PBC. Then clear old months to keep the phone light —
         products, current stock and the audit log are never cleared, and the newest close is
         always kept.</div>
@@ -2083,6 +2381,22 @@ function settingsView(){
         Realtime Database → set its rules so one path allows read + write → paste that path’s URL (ending
         in <b>.json</b>) here. The URL is the only key — keep the owner link private.</div>
     </div>
+    <div class="ticket" style="margin-bottom:8px">
+      <b style="font-size:15px">Cloud backup — automatic, weekly</b>
+      ${shop.sync ? (() => { const lc = load('mc_lastCloud', null);
+        return `<div class="note" style="margin-top:6px">The till sends a full copy of everything to your
+          live-view relay <b>once a week, by itself</b> (it keeps the last ~5 weekly copies). If this
+          tablet is ever lost or dies, a new one gets it all back with <b>Restore from cloud</b>.</div>
+        <div class="salecard" style="border-left:4px solid ${lc?'var(--green)':'#fb8c00'};margin:8px 0">
+          <b>${lc ? 'Last cloud backup: '+lc.date : 'No cloud backup sent yet'}</b>
+          <div class="lines">${lc ? 'Next one goes automatically about a week later.' : 'Tap BACK UP NOW to send the first one.'}</div></div>
+        <div class="mbtns">
+          <button class="cancel" onclick="restoreCloud()">Restore from cloud</button>
+          <button class="ok" onclick="cloudBackup(true)">BACK UP NOW</button>
+        </div>`; })()
+      : `<div class="note" style="margin-top:6px">Needs the Live view relay above — paste the relay URL
+          there first, and weekly cloud backups switch on by themselves.</div>`}
+    </div>
     <div class="setrow"><span>Audit log</span>
       <button onclick="office='audit';render()">View</button></div>
     <div class="setrow"><span>Backup all data</span>
@@ -2095,9 +2409,9 @@ function settingsView(){
       <button style="color:var(--red);border-color:var(--red)" onclick="clearData(true)">Reset</button></div>
     <div class="setrow"><span>Lock back office</span>
       <button onclick="lockOffice()">Lock now</button></div>
-    <div class="note">Back up weekly and before any phone repair or reset — save the file to
-      Google Drive. Data lives only on this device; clearing the app's storage deletes the
-      sales record.</div>`;
+    <div class="note">The cloud backup above runs weekly by itself; still download a file backup
+      before any phone repair or reset and save it to Google Drive. Data lives only on this
+      device; clearing the app's storage deletes the sales record.</div>`;
 }
 function changePin(){ pinAsk('Enter NEW 4-digit PIN', p1 =>
   pinAsk('Repeat new PIN', p2 => {
@@ -2113,7 +2427,7 @@ function changeSupPin(){ pinAsk('Enter NEW supervisor PIN', p1 =>
       toast('That is the owner PIN — pick another', true); return; }
     localStorage.setItem('mc_pin_sup', p1); toast('Supervisor PIN changed');
   })); }
-function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, suppliers, payments, audit, closes, opens, batches, adjustments}),
+function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, suppliers, payments, audit, closes, opens, batches, adjustments, debtors, debtorPays}),
   'meat-pos-backup-'+today()+'.json', 'application/json'); }
 // ---------------- month-end archive & prune ----------------
 function archiveMonth(){
@@ -2121,8 +2435,8 @@ function archiveMonth(){
   const inM = x => x.date && x.date.startsWith(m);
   const S = sales.filter(inM), D = deliveries.filter(inM),
         B = batches.filter(inM), C = closes.filter(inM), A = adjustments.filter(inM),
-        P = payments.filter(inM), O = opens.filter(inM);
-  if (!S.length && !D.length && !B.length && !C.length && !A.length && !P.length && !O.length){
+        P = payments.filter(inM), O = opens.filter(inM), DP = debtorPays.filter(inM);
+  if (!S.length && !D.length && !B.length && !C.length && !A.length && !P.length && !O.length && !DP.length){
     toast('Nothing recorded in '+m, true); return; }
   const q = v => /[",\n]/.test(String(v)) ? '"'+String(v).replace(/"/g,'""')+'"' : String(v);
   const csvOf = rows => rows.map(r => r.map(q).join(',')).join('\n');
@@ -2145,11 +2459,16 @@ function archiveMonth(){
       ...B.map(b => [b.date, b.time, b.source, b.inputKg.toFixed(3), (b.costKg||0).toFixed(2),
         b.inputCost.toFixed(2), b.outKg.toFixed(3), (Math.round(b.yield*1000)/10), b.waste.toFixed(3),
         b.retail.toFixed(2), b.uplift.toFixed(2), b.outs.map(o=>o.name+' '+o.kg.toFixed(3)).join('; ')])])],
+    ['debtor-payments-'+m+'.csv', csvOf([
+      ['Date','Time','Customer','Amount','Method','Note','Applied to sales'],
+      ...DP.map(p => [p.date, p.time, p.debtor, p.amt.toFixed(2), p.method, p.note||'',
+        (p.alloc||[]).map(a=>String(a.saleId).slice(-6)+':'+a.amt.toFixed(2)).join('; ')])])],
     ['closes-'+m+'.csv', csvOf([
-      ['Date','Time','Opened by','Float','Takings Cash','Takings EcoCash','Takings Swipe','Counted Cash','Counted EcoCash','Counted Swipe','Cash paid out','Till gap','Missing stock $','Lines counted','Lines flagged','Note'],
+      ['Date','Time','Opened by','Float','Takings Cash','Takings EcoCash','Takings Swipe','On account','Debtor cash in','Counted Cash','Counted EcoCash','Counted Swipe','Cash paid out','Till gap','Missing stock $','Lines counted','Lines flagged','Note'],
       ...C.map(c =>
         [c.date, c.time, c.opener||'', (c.float||0).toFixed(2),
           c.theo.Cash.toFixed(2), c.theo.EcoCash.toFixed(2), c.theo.Swipe.toFixed(2),
+          (c.acct||0).toFixed(2), recvInOf(c).toFixed(2),
           c.actual.Cash.toFixed(2), c.actual.EcoCash.toFixed(2), c.actual.Swipe.toFixed(2),
           payoutOf(c).toFixed(2), tillGapOf(c).toFixed(2),
           Math.abs(round2(c.lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0))).toFixed(2),
@@ -2158,28 +2477,31 @@ function archiveMonth(){
       ['Date','Time','Product','Location','From kg','To kg','Change kg','Cost/unit','Value at cost','Reason'],
       ...A.map(a => [a.date, a.time, a.name, a.loc||'', a.from.toFixed(3), a.to.toFixed(3), a.delta.toFixed(3),
         (a.cost||0).toFixed(2), round2(a.delta*(a.cost||0)).toFixed(2), a.reason||''])])],
-    ['archive-'+m+'.json', JSON.stringify({month:m, exported:today(), products, suppliers,
-      sales:S, deliveries:D, batches:B, closes:C, opens:O, adjustments:A, payments:P})]
+    ['archive-'+m+'.json', JSON.stringify({month:m, exported:today(), products, suppliers, debtors,
+      sales:S, deliveries:D, batches:B, closes:C, opens:O, adjustments:A, payments:P, debtorPays:DP})]
   ];
   files.forEach(([name, data], i) => setTimeout(() =>
     dl(data, name, name.endsWith('.json')?'application/json':'text/csv'), i*400));
   logAudit('archive', m+' pack exported ('+S.length+' sales, '+D.length+' deliveries, '+
-    P.length+' payments, '+B.length+' batches, '+C.length+' closes, '+A.length+' adjustments)');
-  save(); toast('Month pack downloading — save all 6 files to Drive');
+    P.length+' payments, '+DP.length+' debtor payments, '+B.length+' batches, '+C.length+' closes, '+A.length+' adjustments)');
+  save(); cloudBackup(true, true);
+  toast('Month pack downloading — save all 8 files to Drive');
 }
 function pruneOld(){
   const m = (document.getElementById('arc-m')||{}).value || today().slice(0,7);
   const cut = m + '-01';
   const lastClose = closes[closes.length-1];
   const lastOpen = opens[opens.length-1];
-  const n = [sales, deliveries, batches, closes, adjustments, payments, opens]
+  const n = [sales, deliveries, batches, closes, adjustments, payments, opens, debtorPays]
     .reduce((s,arr) => s + arr.filter(x => x.date < cut).length, 0);
   if (!n){ toast('Nothing older than '+m+' to clear', true); return; }
-  ask('Delete '+n+' records dated before '+cut+'? Only do this AFTER downloading their month packs to Drive. Products, suppliers, stock and the audit log are kept.', () => {
-    sales = sales.filter(x => x.date >= cut);
+  ask('Delete '+n+' records dated before '+cut+'? Only do this AFTER downloading their month packs to Drive. Products, suppliers, debtors, stock and the audit log are kept.', () => {
+    // keep any account sale still owed money even if old, so the debt is never lost
+    sales = sales.filter(x => x.date >= cut || (x.pay === 'Account' && !x.void && acctOutstanding(x) > 0.001));
     // keep any delivery still owed money even if old, so the debt is never lost
     deliveries = deliveries.filter(x => x.date >= cut || outstanding(x) > 0.001);
     payments = payments.filter(x => x.date >= cut);
+    debtorPays = debtorPays.filter(x => x.date >= cut);
     batches = batches.filter(x => x.date >= cut);
     adjustments = adjustments.filter(x => x.date >= cut);
     closes = closes.filter(x => x.date >= cut || x === lastClose);  // keep the newest close: it anchors the next till window
@@ -2188,21 +2510,26 @@ function pruneOld(){
     save(); render(); toast(n+' old records cleared');
   });
 }
+function applyBackup(d){
+  products = d.products; sales = d.sales;
+  if (d.shop) { shop = d.shop; saveShop(); }
+  if (Array.isArray(d.deliveries)) deliveries = d.deliveries;
+  if (Array.isArray(d.suppliers)) suppliers = d.suppliers;
+  if (Array.isArray(d.payments)) payments = d.payments;
+  if (Array.isArray(d.audit)) audit = d.audit;
+  if (Array.isArray(d.closes)) closes = d.closes;
+  if (Array.isArray(d.opens)) opens = d.opens;
+  if (Array.isArray(d.batches)) batches = d.batches;
+  if (Array.isArray(d.adjustments)) adjustments = d.adjustments;
+  if (Array.isArray(d.debtors)) debtors = d.debtors;
+  if (Array.isArray(d.debtorPays)) debtorPays = d.debtorPays;
+}
 function restore(){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json';
   inp.onchange = () => { const f = inp.files[0]; if (!f) return;
     f.text().then(t => { try { const d = JSON.parse(t);
         if (!Array.isArray(d.sales) || !Array.isArray(d.products)) throw 0;
         ask('Replace ALL data on this device with the backup?', () => {
-          products = d.products; sales = d.sales;
-          if (d.shop) { shop = d.shop; saveShop(); }
-          if (Array.isArray(d.deliveries)) deliveries = d.deliveries;
-          if (Array.isArray(d.suppliers)) suppliers = d.suppliers;
-          if (Array.isArray(d.payments)) payments = d.payments;
-          if (Array.isArray(d.audit)) audit = d.audit;
-          if (Array.isArray(d.closes)) closes = d.closes;
-          if (Array.isArray(d.opens)) opens = d.opens;
-          if (Array.isArray(d.batches)) batches = d.batches;
-          if (Array.isArray(d.adjustments)) adjustments = d.adjustments;
+          applyBackup(d);
           logAudit('restore', 'all data replaced from backup file');
           save(); render(); toast('Backup restored'); });
       } catch(e){ toast('Not a valid backup file', true); } }); };
@@ -2213,14 +2540,16 @@ function clearData(full){
     if (pin !== (localStorage.getItem('mc_pin') || '2026')){ toast('Wrong PIN', true); return; }
     ask(full
       ? 'FULL RESET: products, prices, overheads, PIN and ALL records go back to factory defaults. This cannot be undone — download a backup first if in any doubt.'
-      : 'Clear ALL sales, deliveries, cutting batches, opens, closes and the audit log, and zero every stock figure? Products, prices, overheads and settings are kept. This cannot be undone.',
+      : 'Clear ALL sales, deliveries, debtors, cutting batches, opens, closes and the audit log, and zero every stock figure? Products, prices, overheads and settings are kept. This cannot be undone.',
       () => {
         if (full){ localStorage.clear(); location.reload(); return; }
         sales = []; deliveries = []; suppliers = []; payments = []; batches = []; closes = []; opens = []; adjustments = []; audit = [];
+        debtors = []; debtorPays = [];
         for (const p of products){ p.freezer = 0; p.chiller = 0; }
         ticket = []; closeDraft = null; cutDraft = null; closeStep = 'start'; viewTs = null;
         openDraft = null; openStep = 'start'; openViewTs = null;
         issueDraft = null; ftakeDraft = null; ftakeLast = null;
+        debSel = null; debPayDraft = null; debEditDraft = null; acctPick = null;
         logAudit('reset', 'test data cleared — all records wiped, stock zeroed, products & settings kept');
         save(); render(); toast('Cleared — ready for real trading');
       });
@@ -2263,13 +2592,16 @@ function dataSnapshot(){
           tolKg:shop.tolKg, tolTill:shop.tolTill},
     products: products.map(p => ({name:p.name, unit:p.unit, price:p.price, cost:p.cost,
       cat:p.cat, raw:!!p.raw, freezer:p.freezer||0, chiller:p.chiller||0, low:p.low||0})),
-    sales: sales.filter(s => s.date >= cut),
+    sales: sales.filter(s => s.date >= cut ||
+      (s.pay === 'Account' && !s.void && acctOutstanding(s) > 0.001)),   // old unpaid debts still count
     closes: closes.filter(c => c.date >= cut),
     adjust: adjustments.filter(x => x.date >= cut),
     batches: batches.filter(b => b.date >= cut),
     deliveries: deliveries.filter(x => outstanding(x) > 0.001 || x.date >= cut),
     suppliers: suppliers,
-    payments: payments.filter(x => x.date >= cut) };
+    payments: payments.filter(x => x.date >= cut),
+    debtors: debtors,
+    debtorPays: debtorPays.filter(x => x.date >= cut) };
 }
 let _syncT, _dataT = 0, _dataH = null, _dataDeadline = 0;
 function pushData(force){
@@ -2297,6 +2629,59 @@ function syncPush(){
     try { fetch(relayUrl('live'), {method:'PUT', body:JSON.stringify(liveSnapshot())}); } catch(e){}
     pushData(false);
   }, 1500);
+}
+// ---------------- automatic cloud backup (weekly, rides the live-view relay) ----------------
+// Full backup PUT to <relay>/backup/s0..s4 — the slot rotates weekly, so the cloud always
+// holds the last ~5 weeks. Small metadata at <relay>/backup/meta/* lets Restore list them
+// without downloading everything.
+let cloudBusy = false;
+function cloudSlot(){ return 's' + (Math.floor(Date.now() / (7*86400000)) % 5); }
+function cloudBackup(force, quiet){
+  if (viewMode || !shop.sync || cloudBusy) return;
+  cloudBusy = true;
+  const slot = cloudSlot();
+  const body = JSON.stringify({cloud:1, exported:today(), ts:Date.now(),
+    products, sales, shop, deliveries, suppliers, payments, audit, closes, opens,
+    batches, adjustments, debtors, debtorPays});
+  const meta = {date:today(), time:new Date().toTimeString().slice(0,5), ts:Date.now(),
+    sales:sales.length, closes:closes.length, kb:Math.round(body.length/1024)};
+  fetch(relayUrl('backup/' + slot), {method:'PUT', body})
+    .then(r => { if (!r.ok) throw 0;
+      return fetch(relayUrl('backup/meta/' + slot), {method:'PUT', body:JSON.stringify(meta)}); })
+    .then(() => { cloudBusy = false;
+      localStorage.setItem('mc_lastCloud', JSON.stringify({ts:Date.now(), date:today(), slot}));
+      if (!quiet){ toast('Backed up to the cloud'); if (tab==='office' && office==='settings') render(); } })
+    .catch(() => { cloudBusy = false;
+      if (!quiet) toast('Cloud backup failed — check the connection', true); });
+}
+// called from save(): backs up once a week, retrying quietly (at most hourly) until it lands
+function maybeCloudBackup(){
+  if (viewMode || !shop.sync) return;
+  const last = load('mc_lastCloud', {ts:0});
+  if (Date.now() - (last.ts||0) < 7*86400000) return;
+  const tried = +(localStorage.getItem('mc_cloudTry') || 0);
+  if (Date.now() - tried < 3600000) return;
+  localStorage.setItem('mc_cloudTry', String(Date.now()));
+  cloudBackup(false, true);
+}
+function restoreCloud(){
+  if (!shop.sync){ toast('Set up Live view first — the cloud backup rides its relay', true); return; }
+  toast('Looking for cloud backups…');
+  fetch(relayUrl('backup/meta'), {cache:'no-store'}).then(r => r.json()).then(m => {
+    const slots = Object.entries(m || {}).filter(([k,v]) => v && v.ts).sort((a,b) => b[1].ts - a[1].ts);
+    if (!slots.length){ toast('No cloud backups found yet', true); return; }
+    const [slot, meta] = slots[0];
+    ask('Newest cloud backup: '+meta.date+' '+(meta.time||'')+' ('+meta.sales+' sales, '+meta.closes+
+        ' closes). Replace ALL data on this device with it?', () => {
+      fetch(relayUrl('backup/' + slot), {cache:'no-store'}).then(r => r.json()).then(d => {
+        if (!d || !Array.isArray(d.sales) || !Array.isArray(d.products)){
+          toast('Cloud backup unreadable', true); return; }
+        applyBackup(d);
+        logAudit('restore', 'all data replaced from cloud backup of '+meta.date);
+        save(); render(); toast('Cloud backup restored');
+      }).catch(() => toast('Could not fetch the backup — check the connection', true));
+    }, 'RESTORE', 'var(--green)');
+  }).catch(() => toast('Could not reach the relay — check the connection', true));
 }
 function viewLink(){ return location.origin + location.pathname + '?view#' + encodeURIComponent(shop.sync); }
 function copyViewLink(){ try { navigator.clipboard.writeText(viewLink()); toast('Owner link copied'); }
@@ -2356,6 +2741,7 @@ function applyData(d){
   products = d.products || []; sales = d.sales || []; closes = d.closes || [];
   adjustments = d.adjust || []; batches = d.batches || []; deliveries = d.deliveries || [];
   suppliers = d.suppliers || []; payments = d.payments || [];
+  debtors = d.debtors || []; debtorPays = d.debtorPays || [];
   if (d.cfg){ shop.name = d.cfg.name || shop.name; shop.ovh = d.cfg.ovh || shop.ovh;
     shop.wdays = d.cfg.wdays || shop.wdays; shop.loan = d.cfg.loan ?? shop.loan;
     shop.tolKg = d.cfg.tolKg ?? shop.tolKg; shop.tolTill = d.cfg.tolTill ?? shop.tolTill; }
@@ -2457,7 +2843,7 @@ function hideSplash(){
 if ('serviceWorker' in navigator && location.protocol.startsWith('http'))
   navigator.serviceWorker.register('sw.js');
 if (viewMode){ document.getElementById('splash').style.display = 'none'; viewBoot(); }
-else { render(); showSplash(); }
+else { render(); showSplash(); setTimeout(maybeCloudBackup, 9000); }   // weekly cloud backup check after boot
 </script>
 </body>
 </html>
