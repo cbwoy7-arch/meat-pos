@@ -378,6 +378,8 @@ let repSec = 'sales', repAll = false;
 let itemsSnap = null, adjIdx = null, adjLoc = 'chiller';
 let closes = load('mc_closes', []);
 let closeStep = 'start', closeDraft = null, viewTs = null;
+let opens = load('mc_opens', []);                   // start-of-day records: who, float, spot-checks
+let openStep = 'start', openDraft = null, openViewTs = null;
 let batches = load('mc_batches', []);
 let adjustments = load('mc_adjust', []);   // valued stock write-offs / corrections (spoilage etc.)
 let cutDraft = null;
@@ -406,6 +408,7 @@ function save(){ localStorage.setItem('mc_products', JSON.stringify(products));
                  localStorage.setItem('mc_payments', JSON.stringify(payments));
                  localStorage.setItem('mc_audit', JSON.stringify(audit));
                  localStorage.setItem('mc_closes', JSON.stringify(closes));
+                 localStorage.setItem('mc_opens', JSON.stringify(opens));
                  localStorage.setItem('mc_batches', JSON.stringify(batches));
                  localStorage.setItem('mc_adjust', JSON.stringify(adjustments)); syncPush(); }
 function logAudit(type, detail, who){
@@ -468,13 +471,15 @@ function render(){
 // ---- back-office navigation history (header ‹ = previous opened screen) ----
 let navStack = [], navLast = null, navRestoring = false;
 function navSnapshot(){ return {office, supSel, supPayDraft, supEditDraft, cutDraft, issueDraft,
-  ftakeDraft, ftakeLast, closeStep, viewTs, repSec, repAll}; }
+  ftakeDraft, ftakeLast, closeStep, viewTs, openStep, openViewTs, repSec, repAll}; }
 function navKey(s){ return JSON.stringify([s.office, s.supSel, !!s.supPayDraft, !!s.supEditDraft,
-  !!s.cutDraft, !!s.issueDraft, !!s.ftakeDraft, !!s.ftakeLast, s.closeStep, s.viewTs, s.repSec, !!s.repAll]); }
+  !!s.cutDraft, !!s.issueDraft, !!s.ftakeDraft, !!s.ftakeLast, s.closeStep, s.viewTs,
+  s.openStep, s.openViewTs, s.repSec, !!s.repAll]); }
 function officeBack(){ const s = navStack.pop(); if (!s) return; navRestoring = true;
   office = s.office; supSel = s.supSel; supPayDraft = s.supPayDraft; supEditDraft = s.supEditDraft;
   cutDraft = s.cutDraft; issueDraft = s.issueDraft; ftakeDraft = s.ftakeDraft; ftakeLast = s.ftakeLast;
-  closeStep = s.closeStep; viewTs = s.viewTs; repSec = s.repSec; repAll = s.repAll; render(); }
+  closeStep = s.closeStep; viewTs = s.viewTs; openStep = s.openStep; openViewTs = s.openViewTs;
+  repSec = s.repSec; repAll = s.repAll; render(); }
 function tbar(){ const b = document.getElementById('tbar');
   const total = ticket.reduce((s,l)=>s+l.amt,0);
   const show = tab==='sell' && view!=='charge' && ticket.length;
@@ -485,7 +490,9 @@ function tbar(){ const b = document.getElementById('tbar');
 // ---------------- SELL ----------------
 function catsView(){
   const cs = []; for (const p of products) if (!p.raw && !cs.includes(p.cat)) cs.push(p.cat);
-  return '<div class="grid">' + cs.map(c => {
+  const gate = openedToday() ? '' :
+    `<div class="note" style="margin:0 0 8px;text-align:center">⚠ Day not opened yet — Back Office → <b>Open Day</b> (opener + float, ~2 min)</div>`;
+  return gate + '<div class="grid">' + cs.map(c => {
     const n = products.filter(p=>!p.raw && p.cat===c).length;
     return `<button class="cat" style="background:${catColor(c)}" onclick="selCat='${esc(c)}';view='items';render()">
       ${esc(c)}<small>${n} item${n>1?'s':''}</small></button>`;
@@ -567,6 +574,14 @@ function addLine(){ const v = parseFloat(document.getElementById('qty').value);
 }
 function closeModal(){ document.getElementById('modal').classList.remove('open'); }
 function pay(how){ if (!ticket.length) return;
+  // soft gate: first sale of an unopened day asks once, never blocks a queue
+  if (!openedToday() && localStorage.getItem('mc_gateAck') !== today()){
+    ask('The day has not been opened — no float declared, no opener named (Back Office → Open Day). Sell anyway? This is noted in the audit log.',
+      () => { localStorage.setItem('mc_gateAck', today());
+              logAudit('open-skipped', 'selling started before the day was opened');
+              pay(how); }, 'SELL ANYWAY');
+    return;
+  }
   const total = round2(ticket.reduce((s,l)=>s+l.amt,0));
   const rec = {id:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
                lines:ticket, pay:how, total, void:false};
@@ -748,6 +763,7 @@ function officeView(){
   if (office !== 'items') itemsSnap = null;
   if (!canSee(office)) office = 'goods';        // supervisor can't land on owner-only screens
   const sub = `<div class="subnav">
+    <button class="${office==='open'?'on':''}" onclick="office='open';render()">Open Day${openedToday()?'':' ⚠'}</button>
     <button class="${['goods','suppliers'].includes(office)?'on':''}" onclick="office='goods';render()">Goods In</button>
     <button class="${['stock','cut','issue','ftake'].includes(office)?'on':''}" onclick="office='stock';ftakeLast=null;render()">Stock${lowStock().length?' ⚠':''}</button>
     <button class="${office==='close'?'on':''}" onclick="office='close';render()">Close</button>
@@ -764,6 +780,7 @@ function officeView(){
   if (office==='cut') return sub + cutView();
   if (office==='issue') return sub + issueView();
   if (office==='ftake') return sub + ftakeView();
+  if (office==='open') return sub + openView();
   if (office==='close') return sub + closeView();
   if (office==='items') return sub + itemsAdmin();
   if (office==='audit') return sub + auditView();
@@ -773,10 +790,11 @@ function rangeSales(){ return sales.filter(s => s.date >= repFrom && s.date <= r
 function costOf(name){ const p = products.find(x => x.name === name); return p ? p.cost||0 : 0; }
 function lineCost(l){ return l.kg * (l.cost != null ? l.cost : costOf(l.name)); }
 function lowStock(){ return products.filter(p => p.low > 0 && onHand(p) <= p.low); }
-// cash legitimately paid out of the till at a close, and the till gap that accounts for it
+// cash legitimately paid out of the till at a close, and the till gap that accounts for it.
+// c.float (declared at that day's open) means the whole drawer was counted, float included.
 function payoutOf(c){ return round2((c.payouts||[]).reduce((s,x)=>s+(parseFloat(x.amt)||0),0)); }
 function tillGapOf(c){ return round2((c.actual.Cash+c.actual.EcoCash+c.actual.Swipe)
-  + payoutOf(c) - (c.theo.Cash+c.theo.EcoCash+c.theo.Swipe)); }
+  + payoutOf(c) - (c.float||0) - (c.theo.Cash+c.theo.EcoCash+c.theo.Swipe)); }
 function agg(){ const m = {};
   for (const s of rangeSales()) if (!s.void)
     for (const l of s.lines){ m[l.name] = m[l.name] || {kg:0, amt:0, cogs:0};
@@ -1145,6 +1163,131 @@ function doCut(){
   });
 }
 
+// ---------------- START OF DAY (who opens, declared float, optional spot-check) ----------------
+function openedToday(){ const o = opens[opens.length-1];
+  return o && o.date === today() ? o : null; }
+function openView(){
+  if (openStep === 'form') return openForm();
+  if (openStep === 'result') return openResult();
+  const t = openedToday();
+  const lastTs = closes.length ? closes[closes.length-1].ts : 0;
+  const stale = sales.some(s => !s.void && s.id > lastTs && s.date < today());
+  const cards = [...opens].reverse().slice(0,14).map(o => {
+    const bad = (o.checks||[]).some(l => Math.abs(l.varKg) > (o.tolKg ?? shop.tolKg));
+    return `<div class="salecard" onclick="openViewTs=${o.ts};openStep='result';render()"
+      ${bad?'style="border-left:4px solid var(--red)"':''}>
+      <div class="top"><span>${o.date} ${o.time}</span><span>float ${fmt(o.float)}</span></div>
+      <div class="lines">opened by ${esc(o.who)}${(o.checks||[]).length?' · '+o.checks.length+' lines spot-checked':''}${o.note?' · '+esc(o.note):''} · tap to view</div>
+    </div>`; }).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Start of Day</b>
+      <div class="note" style="margin-top:6px">The morning ritual, ~2 minutes: <b>1.</b> name who is
+        opening — they own the till and chiller until the evening count, <b>2.</b> count the cash
+        in the drawer — that is the day's <b>float</b>, on record, <b>3.</b> optionally spot-check
+        any chiller lines (blind — overnight losses show here, not in tonight's variance),
+        <b>4.</b> note anything unusual. The record locks like a close.</div>
+      ${stale ? `<div class="salecard" style="border-left:4px solid var(--red);margin-top:8px">
+        <b>Yesterday was never closed.</b>
+        <div class="lines">Run the Daily Close first — its takings window still spans yesterday's sales.</div></div>` : ''}
+      ${t ? `<div class="salecard" style="border-left:4px solid var(--green);margin-top:8px">
+        <b>Today is open</b> — ${esc(t.who)} at ${t.time}, float ${fmt(t.float)}.
+        <div class="lines">Tonight's Close will expect float + cash takings — count the whole till, float included.</div></div>`
+      : `<button class="bigbtn" onclick="openDraft={who:localStorage.getItem('mc_lastOpener')||'',fl:'',checks:{},note:''};openStep='form';render()">OPEN THE DAY</button>`}
+    </div>
+    ${cards || '<div class="note">No opens recorded yet.</div>'}`;
+}
+function openForm(){
+  const rows = products.map(p => p.raw ? '' :
+    `<div class="itemrow">
+      <span style="flex:2;font-size:14px">${esc(p.name)} <small style="color:#90a4ae">${esc(p.unit)}</small></span>
+      <input style="flex:1" type="number" inputmode="decimal" step="any" placeholder="—"
+             value="${openDraft.checks[p.name] ?? ''}"
+             onchange="openDraft.checks['${esc(p.name)}']=this.value">
+    </div>`).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Open the day</b>
+      <div class="itemrow lab" style="margin-top:8px"><span style="flex:1.6">who is opening (required)</span><span style="flex:1">float in drawer $</span></div>
+      <div class="itemrow">
+        <input style="flex:1.6" placeholder="name" value="${esc(openDraft.who)}"
+               onchange="openDraft.who=this.value">
+        <input style="flex:1" type="number" inputmode="decimal" step="0.01" placeholder="0.00"
+               value="${openDraft.fl}" onchange="openDraft.fl=this.value">
+      </div>
+      <div class="note">Count the notes and coins physically in the drawer right now — enter 0 if
+        there is no float. This figure is what tonight's Close expects back, on top of cash takings.</div>
+      <div class="itemrow lab" style="margin-top:10px"><span>optional spot-check — weigh any chiller lines, blind (leave the rest blank)</span></div>
+      ${rows}
+      <div class="itemrow" style="margin:6px 0 0">
+        <input style="flex:1" placeholder="Note (optional — anything unusual found at opening)"
+               value="${esc(openDraft.note)}" onchange="openDraft.note=this.value">
+      </div>
+      <button class="bigbtn" onclick="ask('Open the day and LOCK the record? Spot-checked lines reset the chiller to your counts.', doOpen)">OPEN &amp; LOCK</button>
+      <button class="bigbtn grey" onclick="openStep='start';render()">Cancel</button>
+    </div>`;
+}
+function doOpen(){
+  if (openDraft && openDraft._done){ toast('This open is already saved', true); return; }
+  if (openedToday()){ toast('Today is already open', true); return; }
+  const who = String(openDraft.who||'').trim();
+  if (!who){ toast('Name who is opening', true); return; }
+  if (openDraft.fl === '' || isNaN(parseFloat(openDraft.fl))){
+    toast('Count the float — enter 0 if none', true); return; }
+  const float = round2(Math.abs(parseFloat(openDraft.fl)));
+  const checks = [];
+  for (const p of products){
+    if (p.raw) continue;
+    const raw = openDraft.checks[p.name];
+    if (raw === undefined || raw === '') continue;
+    const counted = parseFloat(raw);
+    if (isNaN(counted)) continue;
+    const expected = round3(p.chiller||0);
+    const varKg = round3(counted - expected);
+    checks.push({name:p.name, unit:p.unit, price:p.price, expected, counted:round3(counted),
+                 varKg, varVal:round2(varKg * p.price)});
+    p.chiller = round3(counted);                     // physical truth wins, morning included
+  }
+  const ts = Date.now();
+  const o = {ts, date:today(), time:new Date().toTimeString().slice(0,5),
+             who, float, checks, note:String(openDraft.note||'').trim(), tolKg:shop.tolKg};
+  opens.push(o);
+  localStorage.setItem('mc_lastOpener', who);
+  const overnight = round2(checks.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
+  logAudit('open', 'day opened by '+who+', float '+fmt(float)+
+    (checks.length ? ', '+checks.length+' lines spot-checked'+
+      (overnight<0 ? ', overnight shortfall '+fmt(Math.abs(overnight)) : '') : '')+
+    (o.note ? ' — '+o.note : ''), who);
+  openDraft._done = true;
+  openViewTs = ts; openStep = 'result'; save(); render();
+}
+function openResult(){
+  const o = opens.find(x => x.ts === openViewTs) || opens[opens.length-1];
+  if (!o){ openStep = 'start'; return openView(); }
+  const tolKg = o.tolKg ?? shop.tolKg;
+  const flagged = (o.checks||[]).filter(l => Math.abs(l.varKg) > tolKg).length;
+  const overnight = round2((o.checks||[]).filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
+  const rows = [...(o.checks||[])].sort((a,b) => Math.abs(b.varVal)-Math.abs(a.varVal)).map(l => {
+    const bad = Math.abs(l.varKg) > tolKg;
+    return `<tr${bad?' style="color:var(--red);font-weight:bold"':''}>
+      <td>${esc(l.name)}${bad?' ⚠':''}</td><td class="n">${l.expected.toFixed(3)}</td>
+      <td class="n">${l.counted.toFixed(3)}</td><td class="n">${l.varKg>0?'+':''}${l.varKg.toFixed(3)}</td>
+      <td class="n">${fmt(l.varVal)}</td></tr>`; }).join('');
+  return `<div class="kpis">
+      <div class="kpi"><b>${fmt(o.float)}</b><span>Float declared</span></div>
+      <div class="kpi"><b>${esc(o.who)}</b><span>Opened by</span></div>
+      <div class="kpi"${overnight<0?' style="outline:2px solid var(--red)"':''}>
+        <b>${fmt(Math.abs(overnight))}</b><span>Overnight shortfall (at retail)</span></div>
+      <div class="kpi"${flagged?' style="outline:2px solid var(--red)"':''}>
+        <b>${flagged}</b><span>Lines over ${tolKg} kg tolerance</span></div>
+    </div>
+    ${rows ? `<table><tr><th>Spot-checked</th><th class="n">Carried</th><th class="n">Counted</th><th class="n">Var</th><th class="n">Var $</th></tr>${rows}</table>`
+           : '<div class="note">No lines were spot-checked — chiller carried over from the last close unchanged.</div>'}
+    ${o.note ? `<div class="salecard" style="margin-top:8px"><b>Note:</b> <span class="lines">${esc(o.note)}</span></div>` : ''}
+    <div class="note">Opened ${o.date} ${o.time}. This record is locked. Variances here happened
+      <b>overnight</b> — between last night's locked count and this morning — so they belong to
+      whoever had access in between, not to today's trading.</div>
+    <button class="bigbtn" onclick="openViewTs=null;openStep='start';render()">DONE</button>`;
+}
+
 // ---------------- DAILY CLOSE (blind count + till reconciliation) ----------------
 function closeView(){
   if (closeStep === 'count') return closeCount();
@@ -1198,11 +1341,18 @@ function closeCash(){
   const lastTs = closes.length ? closes[closes.length-1].ts : 0;
   const tillPays = payments.filter(pm => pm.fromTill && !pm.closedTs && pm.ts > lastTs);
   const tillPaySum = round2(tillPays.reduce((s,pm)=>s+pm.amt,0));
+  const op = opens.length && opens[opens.length-1].ts > lastTs ? opens[opens.length-1] : null;
   return `<div class="icard">
       <b style="font-size:15px">Step 2 of 2 — count the money</b>
-      <div class="note" style="margin:6px 0 10px">Count what is IN the till. If you keep a float,
-        count it separately and do NOT include it here. EcoCash and swipe come off the phone /
-        machine statements for the day.</div>
+      ${op ? `<div class="salecard" style="border-left:4px solid var(--green);margin:8px 0">
+        <b>Float on record: ${fmt(op.float)}</b> — declared by ${esc(op.who)} at ${op.time}.
+        <div class="lines">Count EVERYTHING in the till, float included — the app expects
+          float + cash takings − pay-outs.</div></div>
+      <div class="note" style="margin:6px 0 10px">EcoCash and swipe come off the phone /
+        machine statements for the day.</div>`
+      : `<div class="note" style="margin:6px 0 10px">Count what is IN the till. If you keep a float,
+        count it separately and do NOT include it here (no float was declared at opening today).
+        EcoCash and swipe come off the phone / machine statements for the day.</div>`}
       ${tillPaySum > 0 ? `<div class="salecard" style="border-left:4px solid #fb8c00;margin-bottom:8px">
         <b>Supplier payments from the till today: ${fmt(tillPaySum)}</b>
         <div class="lines">${tillPays.map(pm=>esc(pm.supplier)+' '+fmt(pm.amt)).join(', ')} — added to the
@@ -1269,8 +1419,12 @@ function doClose(){
   // who received chiller stock since the last close — the responsible person(s) for variances
   const recv = [...new Set(audit.filter(x => x.type === 'issue' && x.who &&
     new Date(x.date + 'T' + x.time).getTime() > lastTs).map(x => x.who))];
+  // the day's open (since the previous close) puts the declared float into this close's maths
+  const op = opens.length && opens[opens.length-1].ts > lastTs && opens[opens.length-1].ts <= ts
+    ? opens[opens.length-1] : null;
   const c = {ts, date:today(), time:new Date().toTimeString().slice(0,5),
              lines, theo, actual, payouts, recv, note:closeDraft.note.trim(), tolKg:shop.tolKg, tolTill:shop.tolTill};
+  if (op){ c.float = op.float; c.opener = op.who; }
   closes.push(c);
   const theoT = round2(theo.Cash + theo.EcoCash + theo.Swipe);
   const missing = round2(lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
@@ -1293,8 +1447,9 @@ function closeResult(){
   const missing = round2(c.lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0));
   const flagged = c.lines.filter(l => Math.abs(l.varKg) > tolKg).length;
   const till = ['Cash','EcoCash','Swipe'].map(m => {
-    const exp = round2((c.theo[m]||0) - (m==='Cash'?payout:0));   // cash that should be IN the till = takings less pay-outs
-    return `<tr><td>${m}${m==='Cash'&&payout?' (less $'+payout.toFixed(2)+' out)':''}</td>
+    // cash that should be IN the till = float carried in + takings − pay-outs
+    const exp = round2((c.theo[m]||0) + (m==='Cash' ? (c.float||0) - payout : 0));
+    return `<tr><td>${m}${m==='Cash'&&c.float?' (incl. $'+c.float.toFixed(2)+' float)':''}${m==='Cash'&&payout?' (less $'+payout.toFixed(2)+' out)':''}</td>
      <td class="n">${fmt(exp)}</td><td class="n">${fmt(c.actual[m]||0)}</td>
      <td class="n">${fmt(round2((c.actual[m]||0)-exp))}</td></tr>`; }).join('');
   const rows = [...c.lines].sort((a,b) => Math.abs(b.varVal)-Math.abs(a.varVal)).map(l => {
@@ -1958,7 +2113,7 @@ function changeSupPin(){ pinAsk('Enter NEW supervisor PIN', p1 =>
       toast('That is the owner PIN — pick another', true); return; }
     localStorage.setItem('mc_pin_sup', p1); toast('Supervisor PIN changed');
   })); }
-function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, suppliers, payments, audit, closes, batches, adjustments}),
+function backup(){ dl(JSON.stringify({products, sales, shop, deliveries, suppliers, payments, audit, closes, opens, batches, adjustments}),
   'meat-pos-backup-'+today()+'.json', 'application/json'); }
 // ---------------- month-end archive & prune ----------------
 function archiveMonth(){
@@ -1966,8 +2121,8 @@ function archiveMonth(){
   const inM = x => x.date && x.date.startsWith(m);
   const S = sales.filter(inM), D = deliveries.filter(inM),
         B = batches.filter(inM), C = closes.filter(inM), A = adjustments.filter(inM),
-        P = payments.filter(inM);
-  if (!S.length && !D.length && !B.length && !C.length && !A.length && !P.length){
+        P = payments.filter(inM), O = opens.filter(inM);
+  if (!S.length && !D.length && !B.length && !C.length && !A.length && !P.length && !O.length){
     toast('Nothing recorded in '+m, true); return; }
   const q = v => /[",\n]/.test(String(v)) ? '"'+String(v).replace(/"/g,'""')+'"' : String(v);
   const csvOf = rows => rows.map(r => r.map(q).join(',')).join('\n');
@@ -1991,9 +2146,10 @@ function archiveMonth(){
         b.inputCost.toFixed(2), b.outKg.toFixed(3), (Math.round(b.yield*1000)/10), b.waste.toFixed(3),
         b.retail.toFixed(2), b.uplift.toFixed(2), b.outs.map(o=>o.name+' '+o.kg.toFixed(3)).join('; ')])])],
     ['closes-'+m+'.csv', csvOf([
-      ['Date','Time','Takings Cash','Takings EcoCash','Takings Swipe','Counted Cash','Counted EcoCash','Counted Swipe','Cash paid out','Till gap','Missing stock $','Lines counted','Lines flagged','Note'],
+      ['Date','Time','Opened by','Float','Takings Cash','Takings EcoCash','Takings Swipe','Counted Cash','Counted EcoCash','Counted Swipe','Cash paid out','Till gap','Missing stock $','Lines counted','Lines flagged','Note'],
       ...C.map(c =>
-        [c.date, c.time, c.theo.Cash.toFixed(2), c.theo.EcoCash.toFixed(2), c.theo.Swipe.toFixed(2),
+        [c.date, c.time, c.opener||'', (c.float||0).toFixed(2),
+          c.theo.Cash.toFixed(2), c.theo.EcoCash.toFixed(2), c.theo.Swipe.toFixed(2),
           c.actual.Cash.toFixed(2), c.actual.EcoCash.toFixed(2), c.actual.Swipe.toFixed(2),
           payoutOf(c).toFixed(2), tillGapOf(c).toFixed(2),
           Math.abs(round2(c.lines.filter(l=>l.varVal<0).reduce((s,l)=>s+l.varVal,0))).toFixed(2),
@@ -2003,7 +2159,7 @@ function archiveMonth(){
       ...A.map(a => [a.date, a.time, a.name, a.loc||'', a.from.toFixed(3), a.to.toFixed(3), a.delta.toFixed(3),
         (a.cost||0).toFixed(2), round2(a.delta*(a.cost||0)).toFixed(2), a.reason||''])])],
     ['archive-'+m+'.json', JSON.stringify({month:m, exported:today(), products, suppliers,
-      sales:S, deliveries:D, batches:B, closes:C, adjustments:A, payments:P})]
+      sales:S, deliveries:D, batches:B, closes:C, opens:O, adjustments:A, payments:P})]
   ];
   files.forEach(([name, data], i) => setTimeout(() =>
     dl(data, name, name.endsWith('.json')?'application/json':'text/csv'), i*400));
@@ -2015,7 +2171,8 @@ function pruneOld(){
   const m = (document.getElementById('arc-m')||{}).value || today().slice(0,7);
   const cut = m + '-01';
   const lastClose = closes[closes.length-1];
-  const n = [sales, deliveries, batches, closes, adjustments, payments]
+  const lastOpen = opens[opens.length-1];
+  const n = [sales, deliveries, batches, closes, adjustments, payments, opens]
     .reduce((s,arr) => s + arr.filter(x => x.date < cut).length, 0);
   if (!n){ toast('Nothing older than '+m+' to clear', true); return; }
   ask('Delete '+n+' records dated before '+cut+'? Only do this AFTER downloading their month packs to Drive. Products, suppliers, stock and the audit log are kept.', () => {
@@ -2026,6 +2183,7 @@ function pruneOld(){
     batches = batches.filter(x => x.date >= cut);
     adjustments = adjustments.filter(x => x.date >= cut);
     closes = closes.filter(x => x.date >= cut || x === lastClose);  // keep the newest close: it anchors the next till window
+    opens = opens.filter(x => x.date >= cut || x === lastOpen);     // keep the newest open: it may carry today's float
     logAudit('prune', n+' records before '+cut+' cleared after archiving');
     save(); render(); toast(n+' old records cleared');
   });
@@ -2042,6 +2200,7 @@ function restore(){ const inp = document.createElement('input'); inp.type = 'fil
           if (Array.isArray(d.payments)) payments = d.payments;
           if (Array.isArray(d.audit)) audit = d.audit;
           if (Array.isArray(d.closes)) closes = d.closes;
+          if (Array.isArray(d.opens)) opens = d.opens;
           if (Array.isArray(d.batches)) batches = d.batches;
           if (Array.isArray(d.adjustments)) adjustments = d.adjustments;
           logAudit('restore', 'all data replaced from backup file');
@@ -2054,12 +2213,13 @@ function clearData(full){
     if (pin !== (localStorage.getItem('mc_pin') || '2026')){ toast('Wrong PIN', true); return; }
     ask(full
       ? 'FULL RESET: products, prices, overheads, PIN and ALL records go back to factory defaults. This cannot be undone — download a backup first if in any doubt.'
-      : 'Clear ALL sales, deliveries, cutting batches, closes and the audit log, and zero every stock figure? Products, prices, overheads and settings are kept. This cannot be undone.',
+      : 'Clear ALL sales, deliveries, cutting batches, opens, closes and the audit log, and zero every stock figure? Products, prices, overheads and settings are kept. This cannot be undone.',
       () => {
         if (full){ localStorage.clear(); location.reload(); return; }
-        sales = []; deliveries = []; suppliers = []; payments = []; batches = []; closes = []; adjustments = []; audit = [];
+        sales = []; deliveries = []; suppliers = []; payments = []; batches = []; closes = []; opens = []; adjustments = []; audit = [];
         for (const p of products){ p.freezer = 0; p.chiller = 0; }
         ticket = []; closeDraft = null; cutDraft = null; closeStep = 'start'; viewTs = null;
+        openDraft = null; openStep = 'start'; openViewTs = null;
         issueDraft = null; ftakeDraft = null; ftakeLast = null;
         logAudit('reset', 'test data cleared — all records wiped, stock zeroed, products & settings kept');
         save(); render(); toast('Cleared — ready for real trading');
