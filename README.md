@@ -25,7 +25,10 @@ Files: `index.html` (the whole app) · `sw.js` (offline cache) · `manifest.json
    doesn't block (counts drift a little against the scale; the daily Close is the truth).
 3. Keep tapping items — every line lands on the same ticket (use ‹ back to switch
    categories). Green **CHARGE** bar shows the running ticket. Tap it → review lines →
-   take payment: **CASH**, **ECOCASH**, or **SWIPE** (card machine).
+   take payment: **CASH**, **ECOCASH**, or **SWIPE** (card machine). A fourth, maroon
+   **ON ACCOUNT** button puts the sale on a customer's credit account — it demands the
+   **owner's PIN on the spot** (the supervisor PIN is refused and the attempt is logged),
+   then a customer picker with live balances. Nobody grants credit but the owner.
 4. Green **✓ confirmation screen** with the amount and payment method (plus a beep and
    vibration on the phone) and a **PRINT RECEIPT** button, then back to categories for
    the next customer. One ticket = one sale = one receipt, however many items are on it.
@@ -115,6 +118,20 @@ Change both PINs in **Settings** on day one (owner only). The two PINs can't be 
   listed with red edges where a spot-check flagged. It also warns if yesterday was never
   closed. Selling before the day is opened prompts once ("sell anyway?" — never blocks a
   queue) and the skip is written to the audit log; the SELL screen shows a small reminder.
+- **Debtors** — the customer credit book, the mirror of the supplier accounts. Credit is
+  **granted only at the till with the owner's PIN** (ON ACCOUNT button on the charge
+  screen; the supervisor PIN is refused and the refusal is logged). An account sale is
+  revenue and comes out of the chiller like any sale, but **no money is expected in that
+  evening's till for it** — it sits on the customer's statement instead, so the till gap
+  stays honest. The tab lists every debtor with the live balance and the age of their
+  oldest debt (amber past a week, red past a month), each with a **statement** (sales as
+  debits, payments as credits) and phone number for the reminder call. **Receiving a
+  payment needs no PIN** — anyone at the till can take the money: cash and EcoCash land
+  in the day's takings and that evening's Close **expects them on top of the sales**, so
+  a debtor paying in never reads as a surplus (Bank means paid straight to the owner,
+  outside the till). Payments settle the oldest sales first, partial payments work, and
+  a debtor-payments CSV joins the month-end pack. Old unpaid account sales survive
+  month-end pruning — a debt is never lost by housekeeping.
 - **Close** — the evening ritual, ~10 minutes: **blind chiller count** (weigh every line
   on the sales counter and enter the scale figure — the app hides what it expects, so the
   count is a measurement, not a confirmation; the freezer is counted weekly, separately),
@@ -136,15 +153,17 @@ Change both PINs in **Settings** on day one (owner only). The two PINs can't be 
 - **Settings** — change PIN, receipt header/footer + printer setup, **Daily Close
   tolerances**, **monthly overheads & loan** (editable list ÷ working days = the
   daily rate; prefilled from the business plan; delete the equipment-hire line in
-  month 13, zero the loan at month 12), the **month-end archive**, **audit log
-  viewer**, backup/restore all data (JSON), lock the office.
+  month 13, zero the loan at month 12), the **month-end archive**, the **weekly cloud
+  backup** (status, back-up-now, restore from cloud), **audit log viewer**,
+  backup/restore all data (JSON), lock the office.
 
 ## Month-end archive (the VAT / tax record base)
 
-Settings → Month-end archive → pick the month → **DOWNLOAD MONTH PACK**: five CSVs
-(sales line-by-line, deliveries, cutting batches, daily closes incl. cash paid out,
-and stock adjustments / write-offs) plus one JSON of everything. Allow multiple
-downloads when Chrome asks, and save all six files to a
+Settings → Month-end archive → pick the month → **DOWNLOAD MONTH PACK**: seven CSVs
+(sales line-by-line, deliveries, supplier payments, debtor payments, cutting batches,
+daily closes incl. cash paid out and debtor money in, and stock adjustments /
+write-offs) plus one JSON of everything. Allow multiple
+downloads when Chrome asks, and save all eight files to a
 Google Drive folder per month — that folder is the PBC's books and the VAT working
 base when registration lands (~Feb–Mar 2027). Then **Clear records older than the
 selected month** to keep the phone light: products, current stock and the audit log
@@ -217,8 +236,14 @@ version in the background, the second one runs it.
 
 - Data lives in the device's app storage. **Never clear the app's/Chrome's site data** —
   that is the sales record.
-- **Backup weekly** (Settings → Backup) and before any phone repair/reset; save the file
-  to Google Drive. Restore reloads it onto any device.
+- **The cloud backup runs by itself** — with Live view set up, the till sends a full copy
+  of everything to the Firebase relay **once a week automatically** (it retries quietly
+  until it lands, and keeps the last ~5 weekly copies in rotating slots under
+  `…/backup`). Settings shows the last backup date, with **BACK UP NOW** and **Restore
+  from cloud** buttons — a lost or dead tablet gets everything back on a new device from
+  just the relay URL.
+- Still **download a file backup** (Settings → Backup) before any phone repair/reset;
+  save the file to Google Drive. Restore reloads it onto any device.
 - One live till by design — devices don't sync. **This app is the master record** — the
   Excel workbook is retired, which makes the weekly backup non-negotiable.
 - Testing before launch? Play freely, then Settings → **Clear test data** (PIN + confirm):
