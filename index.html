@@ -1048,10 +1048,12 @@ function reportsView(){
   const tillGap = round2(rc.reduce((s,c) => s + tillGapOf(c), 0));
   const cashExp = round2(rc.reduce((s,c) => s + payoutOf(c), 0));   // cash paid out of the till
   const ra = adjustments.filter(a => a.date >= repFrom && a.date <= repTo);
-  const wasteCost = round2(ra.filter(a=>a.delta<0).reduce((s,a)=>s + (-a.delta)*(a.cost||0), 0)); // write-offs at cost
   const missing = round2(rc.reduce((s,c) =>
     s + c.lines.filter(l=>l.varVal<0).reduce((x,l)=>x+l.varVal,0), 0));
   const rb = batches.filter(b => b.date >= repFrom && b.date <= repTo);
+  const wasteCost = round2(
+      ra.filter(a=>a.delta<0).reduce((s,a)=>s + (-a.delta)*(a.cost||0), 0)   // stock write-offs at cost
+    + rb.reduce((s,b)=>s + (b.abnCost||0), 0));                              // + abnormal cutting loss at cost
   const cutIn = rb.reduce((s,b)=>s+b.inputKg,0);
   const avgY = cutIn > 0 ? rb.reduce((s,b)=>s+b.outKg,0)/cutIn : null;
   const waste = round3(rb.reduce((s,b)=>s+b.waste,0));
@@ -1113,7 +1115,7 @@ function reportsView(){
       <div class="kpi"><b>${tot?Math.round(marginR*100)+'%':'—'}</b><span>Margin</span></div>
       <div class="kpi"><b>${fmt(ovhRange)}</b><span>Overheads (${fmt(round2(dailyOvh))}/day)</span></div>
       <div class="kpi"><b${cashExp>0?' style="color:#fb8c00"':''}>${fmt(cashExp)}</b><span>Cash expenses (till pay-outs)</span></div>
-      <div class="kpi"><b${wasteCost>0?' style="color:#fb8c00"':''}>${fmt(wasteCost)}</b><span>Write-offs / waste (at cost)</span></div>
+      <div class="kpi"><b${wasteCost>0?' style="color:#fb8c00"':''}>${fmt(wasteCost)}</b><span>Write-offs &amp; cutting loss (at cost)</span></div>
       <div class="kpi"><b>${beDay===null?'—':fmt(beDay)}</b><span>Break-even sales / day</span></div>
       <div class="kpi"><b>${fmt(cogs)}</b><span>Cost of goods sold (reorder value)</span></div>
       ${shop.loan>0?`<div class="kpi"><b${afterLoan<0?' style="color:var(--red)"':''}>${fmt(afterLoan)}</b><span>After loan (${fmt(round2(loanDay))}/day financing)</span></div>`:''}
@@ -1221,7 +1223,7 @@ function cutView(){
       <div class="top"><span>${b.date} ${b.time} · ${esc(b.source)}</span>
         <span${lowYield?' style="color:var(--red)"':''}>${Math.round(b.yield*1000)/10}% yield</span></div>
       <div class="lines">${b.inputKg.toFixed(3)} kg in → ${b.outKg.toFixed(3)} kg out ·
-        waste ${b.waste.toFixed(3)} kg · uplift ${fmt(b.uplift)}<br>
+        waste ${b.waste.toFixed(3)} kg${b.abnCost>0?' · <b style="color:#fb8c00">abnormal loss '+fmt(b.abnCost)+'</b>':''} · uplift ${fmt(b.uplift)}<br>
         ${b.outs.map(o => esc(o.name)+' '+o.kg.toFixed(3)).join(', ')}</div>
     </div>`; }).join('');
   return `<div class="icard">
@@ -1286,8 +1288,11 @@ function cutCalc(){
                 price:(products.find(p=>p.name===o.name)||{}).price || 0}));
   const outKg = round3(outs.reduce((s,o)=>s+o.kg,0));
   const retail = round2(outs.reduce((s,o)=>s+o.kg*o.price,0));
-  return {inKg, cost, outs, outKg, retail,
-          waste: round3(inKg-outKg), yieldPct: inKg>0 ? outKg/inKg : 0,
+  const waste = round3(inKg-outKg);
+  const abnKg = round3(Math.max(0, waste - inKg*0.05));   // loss beyond the 5% normal butchery yield loss
+  return {inKg, cost, outs, outKg, retail, waste,
+          yieldPct: inKg>0 ? outKg/inKg : 0,
+          abnKg, abnCost: round2(abnKg*cost),             // abnormal cutting loss valued at input cost
           inputCost: round2(inKg*cost), uplift: round2(retail - inKg*cost)};
 }
 function cutSum(){
@@ -1298,6 +1303,7 @@ function cutSum(){
   el.innerHTML = 'Out '+c.outKg.toFixed(3)+' of '+c.inKg.toFixed(3)+' kg = <b>'+
     (Math.round(c.yieldPct*1000)/10)+'% yield</b> · waste '+c.waste.toFixed(3)+' kg · retail value '+
     fmt(c.retail)+' vs cost '+fmt(c.inputCost)+' = <b>uplift '+fmt(c.uplift)+'</b>'+
+    (c.abnCost>0 ? ' · <b style="color:#fb8c00">abnormal loss '+fmt(c.abnCost)+' at cost</b> (waste over the 5% norm)' : '')+
     (c.outKg > c.inKg ? '<br><b style="color:var(--red)">Outputs weigh MORE than the input — recheck.</b>' : '')+
     (src && c.inKg > (src.freezer||0) + 0.001 ?
       '<br><b style="color:#fb8c00">Freezer shows only '+(src.freezer||0).toFixed(3)+' kg of '+esc(src.name)+'.</b>' : '');
@@ -1320,11 +1326,12 @@ function doCut(){
     const b = {ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
                source:src.name, inputKg:c.inKg, costKg:c.cost, inputCost:c.inputCost,
                outs:c.outs, outKg:c.outKg, yield:round3(c.yieldPct), waste:c.waste,
-               retail:c.retail, uplift:c.uplift};
+               retail:c.retail, uplift:c.uplift, abnKg:c.abnKg, abnCost:c.abnCost};
     batches.push(b);
     logAudit('cutting', src.name+' '+c.inKg.toFixed(3)+' kg → '+
       c.outs.map(o=>o.name+' '+o.kg.toFixed(3)).join(', ')+
-      ' ('+(Math.round(c.yieldPct*1000)/10)+'% yield, waste '+c.waste.toFixed(3)+' kg)');
+      ' ('+(Math.round(c.yieldPct*1000)/10)+'% yield, waste '+c.waste.toFixed(3)+' kg'+
+      (c.abnCost>0 ? ', abnormal loss '+fmt(c.abnCost)+' at cost' : '')+')');
     cutDraft = null; save(); render();
     toast(c.yieldPct < 0.95 ? 'Saved — yield below 95%, review the cutting' : 'Batch saved, stock updated');
   });
@@ -2832,10 +2839,10 @@ function archiveMonth(){
       ...P.map(p => [p.date, p.time, p.supplier, p.amt.toFixed(2), p.method, p.fromTill?'Y':'N', p.note||'',
         (p.alloc||[]).map(a=>String(a.deliveryId).slice(-6)+':'+a.amt.toFixed(2)).join('; ')])])],
     ['cutting-'+m+'.csv', csvOf([
-      ['Date','Time','Source','Input kg','Cost/kg','Input cost','Output kg','Yield %','Waste kg','Retail value','Uplift','Outputs'],
+      ['Date','Time','Source','Input kg','Cost/kg','Input cost','Output kg','Yield %','Waste kg','Abnormal loss $','Retail value','Uplift','Outputs'],
       ...B.map(b => [b.date, b.time, b.source, b.inputKg.toFixed(3), (b.costKg||0).toFixed(2),
         b.inputCost.toFixed(2), b.outKg.toFixed(3), (Math.round(b.yield*1000)/10), b.waste.toFixed(3),
-        b.retail.toFixed(2), b.uplift.toFixed(2), b.outs.map(o=>o.name+' '+o.kg.toFixed(3)).join('; ')])])],
+        (b.abnCost||0).toFixed(2), b.retail.toFixed(2), b.uplift.toFixed(2), b.outs.map(o=>o.name+' '+o.kg.toFixed(3)).join('; ')])])],
     ['debtor-payments-'+m+'.csv', csvOf([
       ['Date','Time','Customer','Amount','Method','Note','Applied to sales'],
       ...DP.map(p => [p.date, p.time, p.debtor, p.amt.toFixed(2), p.method, p.note||'',
