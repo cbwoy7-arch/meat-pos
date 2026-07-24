@@ -737,31 +737,57 @@ function printSale(idOrSale){
   else if (shop.printer === 'pdf') pdfPrint(s);
   else shareTxt(txt);
 }
-// Hand-rolled single-page PDF (Courier, 58 mm slip width) — keeps the app dependency-free
-function pdfBlob(txt){
+// Receipt logo — logo.jpg is SW-cached, so this works offline; receipts degrade to
+// plain text if it can't load. Loaded once, kept for both PDF embed and thermal raster.
+let LOGO = null;                                    // undefined=untried, false=failed, {…}=ready
+async function logoJpeg(){
+  if (LOGO !== null) return LOGO || null;
+  try {
+    const buf = new Uint8Array(await (await fetch('./logo.jpg')).arrayBuffer());
+    const img = new Image();
+    await new Promise((ok, no) => { img.onload = ok; img.onerror = no;
+      img.src = URL.createObjectURL(new Blob([buf], {type:'image/jpeg'})); });
+    LOGO = {bytes:buf, w:img.naturalWidth, h:img.naturalHeight, img};
+  } catch(e){ LOGO = false; }
+  return LOGO || null;
+}
+// Hand-rolled single-page PDF (Courier, 58 mm slip width) — keeps the app dependency-free.
+// Byte-accurate assembly (TextEncoder) so the JPEG logo can sit inside as a real XObject.
+function pdfBlob(txt, logo){
   const lines = txt.split('\n');
-  const W = 164, LH = 9.6, H = Math.max(80, Math.round(lines.length * LH + 26));
+  const W = 164, LH = 9.6;
+  const iw = 140, ih = logo ? Math.round(iw * logo.h / logo.w) : 0;   // logo 140pt wide, centred
+  const H = Math.max(80, Math.round(lines.length * LH + 26 + (logo ? ih + 6 : 0)));
   const escP = s => s.replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
-  const content = 'BT /F1 8 Tf ' + LH + ' TL 1 0 0 1 5 ' + (H - 14) + ' Tm\n' +
+  const content = (logo ? 'q ' + iw + ' 0 0 ' + ih + ' ' + ((W - iw) / 2) + ' ' + (H - ih - 6) + ' cm /Im1 Do Q\n' : '') +
+    'BT /F1 8 Tf ' + LH + ' TL 1 0 0 1 5 ' + (H - 14 - (logo ? ih + 6 : 0)) + ' Tm\n' +
     lines.map(l => '(' + escP(l) + ') Tj T*\n').join('') + 'ET';
   const objs = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + W + ' ' + H + '] ' +
-      '/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+      '/Resources << /Font << /F1 4 0 R >> >>' + (logo ? ' /XObject << /Im1 6 0 R >> >>' : ' >>') +
+      ' /Contents 5 0 R >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>',
     '<< /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream'
   ];
-  let pdf = '%PDF-1.4\n'; const offs = [];
-  objs.forEach((o, i) => { offs.push(pdf.length); pdf += (i+1) + ' 0 obj\n' + o + '\nendobj\n'; });
-  const xref = pdf.length;
-  pdf += 'xref\n0 ' + (objs.length + 1) + '\n0000000000 65535 f \n' +
+  if (logo) objs.push(['<< /Type /XObject /Subtype /Image /Width ' + logo.w + ' /Height ' + logo.h +
+    ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + logo.bytes.length +
+    ' >>\nstream\n', logo.bytes, '\nendstream']);
+  const enc = new TextEncoder(), parts = []; let off = 0;
+  const push = s => { const b = typeof s === 'string' ? enc.encode(s) : s; parts.push(b); off += b.length; };
+  push('%PDF-1.4\n');
+  const offs = [];
+  objs.forEach((o, i) => { offs.push(off); push((i + 1) + ' 0 obj\n');
+    for (const p of (Array.isArray(o) ? o : [o])) push(p); push('\nendobj\n'); });
+  const xref = off;
+  push('xref\n0 ' + (objs.length + 1) + '\n0000000000 65535 f \n' +
     offs.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('') +
-    'trailer\n<< /Size ' + (objs.length + 1) + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF';
-  return new Blob([pdf], {type:'application/pdf'});
+    'trailer\n<< /Size ' + (objs.length + 1) + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF');
+  return new Blob(parts, {type:'application/pdf'});
 }
 async function pdfPrint(s){
-  const blob = pdfBlob(receiptText(s));
+  const blob = pdfBlob(receiptText(s), await logoJpeg());
   const name = 'receipt-' + s.date + '-' + String(s.id).slice(-6) + '.pdf';
   try {
     const file = new File([blob], name, {type:'application/pdf'});
@@ -812,11 +838,36 @@ async function btEnsure(){
   }
   throw new Error('printer service not found');
 }
+// Logo as ESC/POS raster (GS v 0) — 384 dots = full 58 mm width, so it prints centred.
+// Rendered once and kept; any failure returns null and the receipt prints text-only.
+let LOGO_POS;
+async function logoEscpos(){
+  if (LOGO_POS !== undefined) return LOGO_POS;
+  try {
+    const logo = await logoJpeg(); if (!logo) return (LOGO_POS = null);
+    const W = 384, H = Math.round(logo.h * W / logo.w), bpr = W / 8;
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const cx = cv.getContext('2d');
+    cx.fillStyle = '#fff'; cx.fillRect(0, 0, W, H); cx.drawImage(logo.img, 0, 0, W, H);
+    const d = cx.getImageData(0, 0, W, H).data;
+    const out = new Uint8Array(8 + bpr * H);
+    out.set([0x1d, 0x76, 0x30, 0x00, bpr & 255, bpr >> 8, H & 255, H >> 8]);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
+      const i = (y * W + x) * 4;
+      if (.299*d[i] + .587*d[i+1] + .114*d[i+2] < 160)          // dark pixel → black dot
+        out[8 + y * bpr + (x >> 3)] |= 0x80 >> (x & 7);
+    }
+    LOGO_POS = out;
+  } catch(e){ LOGO_POS = null; }
+  return LOGO_POS;
+}
 async function btPrint(txt){
   try {
     await btEnsure();
     const enc = new TextEncoder();
+    const raster = await logoEscpos();
     const bytes = new Uint8Array([0x1b, 0x40,                    // ESC @ init
+      ...(raster || []), ...(raster ? [0x0a] : []),              // logo + feed, when it loaded
       ...enc.encode(txt + '\n\n\n\n'), 0x1d, 0x56, 0x42, 0x00]); // GS V partial cut
     for (let i = 0; i < bytes.length; i += 100){
       const chunk = bytes.slice(i, i + 100);
