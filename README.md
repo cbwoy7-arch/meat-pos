@@ -29,9 +29,16 @@ Files: `index.html` (the whole app) · `sw.js` (offline cache) · `manifest.json
    **ON ACCOUNT** button puts the sale on a customer's credit account — it demands the
    **owner's PIN on the spot** (the supervisor PIN is refused and the attempt is logged),
    then a customer picker with live balances. Nobody grants credit but the owner.
-4. Green **✓ confirmation screen** with the amount and payment method (plus a beep and
-   vibration on the phone) and a **PRINT RECEIPT** button, then back to categories for
-   the next customer. One ticket = one sale = one receipt, however many items are on it.
+4. **CASH asks what the customer handed over** and works out the change. Tap **EXACT** if
+   they gave the exact money, or tap a note button (+$1 … +$100) once per note handed
+   over — tap $20 twice for two twenties — or type the amount. The change shows live
+   while you're still holding the money, and **SHORT $x.xx** in red if it doesn't cover
+   the ticket (DONE refuses until it does). EcoCash and swipe are exact by nature, so
+   they go straight through as before.
+5. Green **✓ confirmation screen** with the amount and payment method (plus a beep and
+   vibration on the phone), the **change to hand back** in a big white box if there is
+   any, and a **PRINT RECEIPT** button, then back to categories for the next customer.
+   One ticket = one sale = one receipt, however many items are on it.
 
 ## Back office (the backend)
 
@@ -228,7 +235,10 @@ and a mystery.
 Every sale card in Reports has a **PRINT** button (reprints work too), and the green
 confirmation screen has **PRINT RECEIPT**. Receipts are 58 mm / 32-column format with
 the shop name, date/time, sale number, every line (kg × price), total and payment
-method — set the header and footer text in Settings → Shop & receipts.
+method — set the header and footer text in Settings → Shop & receipts. Cash sales also
+print **CASH TENDERED** and **CHANGE** under the total, so the customer can check the
+change against the slip. Change never moves the takings: the money handed back comes
+out of the same till, so the sale still counts as its total in reports and at Close.
 
 Three printer modes in Settings → Shop & receipts:
 
