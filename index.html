@@ -83,10 +83,22 @@
   .modetog button { flex:1; padding:9px 0; border:1px solid var(--green); background:#fff;
                     color:var(--greend); border-radius:10px; font-size:15px; font-weight:700; }
   .modetog button.on { background:var(--green); color:#fff; border-color:var(--green); }
-  #qty { width:100%; font-size:30px; padding:11px; border:2px solid var(--green);
+  #qty, #t-amt { width:100%; font-size:30px; padding:11px; border:2px solid var(--green);
          border-radius:12px; text-align:center; font-weight:600; outline:none; }
-  #qty:focus { box-shadow:0 0 0 4px rgba(124,179,66,.18); }
+  #qty:focus, #t-amt:focus { box-shadow:0 0 0 4px rgba(124,179,66,.18); }
   #conv { text-align:center; color:#555; font-size:16px; padding:8px 0; min-height:34px; }
+  /* cash tender sheet */
+  .exactbtn { width:100%; padding:12px 0; margin-bottom:9px; border:0; border-radius:12px; color:#fff;
+              font-size:15px; font-weight:700; box-shadow:var(--sh);
+              background:linear-gradient(150deg, #86bc4e, var(--greend)); }
+  .notes { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .notes button { flex:0 1 calc(33.333% - 4px); padding:12px 0; border:1px solid var(--green); background:#fff;
+                  color:var(--greend); border-radius:10px; font-size:15px; font-weight:700; }
+  .notes button:active { background:var(--green); color:#fff; }
+  #t-chg { text-align:center; font-size:23px; font-weight:700; padding:9px 0;
+           min-height:44px; color:var(--greend); }
+  #t-chg.short { color:var(--red); }
+  #t-chg.hint { font-size:14px; font-weight:400; color:var(--muted); }
   .mbtns { display:flex; gap:8px; }
   .mbtns button { flex:1; padding:13px 0; border:0; border-radius:12px; font-size:16px; font-weight:700; }
   .ok { background:linear-gradient(150deg, #86bc4e, var(--greend)); color:#fff; box-shadow:var(--sh); }
@@ -120,6 +132,8 @@
   #done .amt { font-size:44px; font-weight:700; }
   #done.open .amt { animation:rise .35s ease-out .12s backwards; }
   #done .how { font-size:18px; opacity:.95; margin-top:6px; }
+  #done .chg { margin-top:14px; background:#fff; color:var(--greend); font-size:26px; font-weight:700;
+               border-radius:14px; padding:10px 20px; box-shadow:0 6px 18px rgba(0,0,0,.25); }
   #done .msg { font-size:14px; opacity:.85; margin-top:16px; }
   #done .prbtn { margin-top:22px; background:#fff; color:var(--greend); border:0;
                  border-radius:12px; padding:14px 30px; font-size:16px; font-weight:700;
@@ -262,6 +276,23 @@
   </div>
 </div>
 
+<div class="overlay" id="tender">
+  <div class="card">
+    <h2>Cash — how much did the customer hand over?</h2>
+    <div class="price" id="t-due"></div>
+    <button class="exactbtn" id="t-exact" onclick="tenderExact()"></button>
+    <div class="notes" id="t-notes"></div>
+    <input id="t-amt" type="number" inputmode="decimal" step="any" min="0"
+           placeholder="0.00" oninput="tenderCalc()">
+    <div id="t-chg"></div>
+    <div class="mbtns">
+      <button class="cancel" onclick="tenderClose()">Cancel</button>
+      <button class="cancel" onclick="tenderSet('')">CLEAR</button>
+      <button class="ok" onclick="tenderDone()">DONE</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="confirm" style="align-items:center">
   <div class="card" style="border-radius:16px;margin:0 20px">
     <h2 id="c-text" style="margin-bottom:14px"></h2>
@@ -309,6 +340,7 @@
   <div class="circ">✓</div>
   <div class="amt" id="d-amt"></div>
   <div class="how" id="d-how"></div>
+  <div class="chg" id="d-chg" style="display:none"></div>
   <button class="prbtn" onclick="event.stopPropagation();printLast()">🖨 PRINT RECEIPT</button>
   <div class="msg">Sale recorded — tap to continue</div>
 </div>
@@ -535,12 +567,13 @@ function chargeView(){
   return `<div class="ticket">${lines}
       <div class="tot"><span>TOTAL</span><span>${fmt(total)}</span></div>
       <div class="payrow">
-        <button class="p-cash" onclick="pay('Cash')">CASH</button>
+        <button class="p-cash" onclick="tenderOpen()">CASH</button>
         <button class="p-eco" onclick="pay('EcoCash')">ECOCASH</button>
         <button class="p-swipe" onclick="pay('Swipe')">SWIPE</button>
       </div>
       <button class="p-acct" onclick="acctStart()">🔒 ON ACCOUNT — owner PIN</button></div>
     <div class="note">Take the money / confirm the EcoCash or swipe approval BEFORE pressing the button.
+      CASH asks what the customer handed over and works out the change — it prints on the receipt.
       On account = the customer takes the meat now and owes the shop — only the owner's PIN can authorise it.</div>`;
 }
 // selling is chiller-only: an empty chiller line blocks the sale and points at the fix
@@ -599,28 +632,69 @@ function addLine(){ const v = parseFloat(document.getElementById('qty').value);
   closeModal(); render();
 }
 function closeModal(){ document.getElementById('modal').classList.remove('open'); }
-function pay(how){ if (!ticket.length) return;
-  // soft gate: first sale of an unopened day asks once, never blocks a queue
-  if (!openedToday() && localStorage.getItem('mc_gateAck') !== today()){
-    ask('The day has not been opened — no float declared, no opener named (Back Office → Open Day). Sell anyway? This is noted in the audit log.',
-      () => { localStorage.setItem('mc_gateAck', today());
-              logAudit('open-skipped', 'selling started before the day was opened');
-              pay(how); }, 'SELL ANYWAY');
-    return;
-  }
+// soft gate: the first sale of an unopened day asks once, never blocks a queue
+function dayGate(retry){
+  if (openedToday() || localStorage.getItem('mc_gateAck') === today()) return true;
+  ask('The day has not been opened — no float declared, no opener named (Back Office → Open Day). Sell anyway? This is noted in the audit log.',
+    () => { localStorage.setItem('mc_gateAck', today());
+            logAudit('open-skipped', 'selling started before the day was opened');
+            retry(); }, 'SELL ANYWAY');
+  return false;
+}
+// tendered is what the customer handed over (cash only) — the change is worked out from it
+function pay(how, tendered){ if (!ticket.length) return;
+  if (!dayGate(() => pay(how, tendered))) return;
   const total = round2(ticket.reduce((s,l)=>s+l.amt,0));
   const rec = {id:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
                lines:ticket, pay:how, total, void:false};
+  if (how === 'Cash' && tendered != null && tendered >= total - 0.001){
+    rec.tendered = round2(tendered);
+    rec.change = round2(rec.tendered - total);            // change is out of the same till — takings stay = total
+  }
   sales.push(rec); lastSaleId = rec.id;
   for (const l of rec.lines){ const p = products.find(x => x.name === l.name);
     if (p) p.chiller = round3((p.chiller||0) - l.kg); }   // sales come out of the chiller
-  ticket = []; view = 'cats'; save(); render(); showDone(total, how);
+  ticket = []; view = 'cats'; save(); render(); showDone(total, how, rec.change);
   if (shop.auto && shop.printer !== 'off') printSale(rec.id);
 }
-function showDone(total, how){
+
+// ---------------- cash tendered → change ----------------
+let tenderTotal = 0;
+function tenderOpen(){
+  if (!ticket.length) return;
+  if (!dayGate(tenderOpen)) return;
+  tenderTotal = round2(ticket.reduce((s,l)=>s+l.amt,0));
+  document.getElementById('t-due').textContent = 'Total due ' + fmt(tenderTotal);
+  document.getElementById('t-exact').textContent = 'EXACT ' + fmt(tenderTotal) + ' — no change';
+  document.getElementById('t-notes').innerHTML = [1,2,5,10,20,50,100]
+    .map(n => `<button onclick="tenderAdd(${n})">+${fmt(n)}</button>`).join('');
+  tenderSet('');
+  document.getElementById('tender').classList.add('open');
+}
+function tenderSet(v){ document.getElementById('t-amt').value = v === '' ? '' : round2(v); tenderCalc(); }
+function tenderAdd(n){ tenderSet(round2(tenderVal() + n)); }   // tap a note per note handed over
+function tenderVal(){ return parseFloat(document.getElementById('t-amt').value) || 0; }
+function tenderCalc(){ const el = document.getElementById('t-chg'), v = tenderVal();
+  if (!v){ el.className = 'hint';
+    el.textContent = 'Tap each note the customer hands over, or type the amount'; return; }
+  const d = round2(v - tenderTotal);
+  if (d < -0.001){ el.className = 'short'; el.textContent = 'SHORT ' + fmt(-d); }
+  else { el.className = ''; el.textContent = d > 0.001 ? 'CHANGE ' + fmt(d) : 'No change due'; }
+}
+function tenderClose(){ document.getElementById('tender').classList.remove('open'); }
+function tenderExact(){ tenderClose(); pay('Cash', tenderTotal); }
+function tenderDone(){ const v = tenderVal();
+  if (v < tenderTotal - 0.001){
+    toast('That is less than the total — take the rest, or put the sale ON ACCOUNT', true); return; }
+  tenderClose(); pay('Cash', v);
+}
+function showDone(total, how, change){
   document.getElementById('d-amt').textContent = fmt(total);
   document.getElementById('d-how').textContent =
     /^(Cash|EcoCash|Swipe)$/.test(how) ? how + ' payment received' : how;
+  const c = document.getElementById('d-chg');
+  c.textContent = change > 0.001 ? 'CHANGE ' + fmt(change) : '';
+  c.style.display = change > 0.001 ? '' : 'none';
   document.getElementById('done').classList.add('open');
   try { navigator.vibrate && navigator.vibrate(150); } catch(e){}
   try { const ac = new (window.AudioContext||window.webkitAudioContext)();
@@ -628,20 +702,15 @@ function showDone(total, how){
     o.frequency.value = 880; g.gain.value = .12;
     o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + .15);
   } catch(e){}
-  clearTimeout(showDone._h); showDone._h = setTimeout(hideDone, 4000);
+  // change stays up longer — the cashier has to count it out before the screen clears
+  clearTimeout(showDone._h); showDone._h = setTimeout(hideDone, change > 0.001 ? 9000 : 4000);
 }
 function hideDone(){ document.getElementById('done').classList.remove('open'); }
 
 // ---------------- ON ACCOUNT (credit sale — owner PIN only) ----------------
 function acctStart(){
   if (!ticket.length) return;
-  if (!openedToday() && localStorage.getItem('mc_gateAck') !== today()){
-    ask('The day has not been opened — no float declared, no opener named (Back Office → Open Day). Sell anyway? This is noted in the audit log.',
-      () => { localStorage.setItem('mc_gateAck', today());
-              logAudit('open-skipped', 'selling started before the day was opened');
-              acctStart(); }, 'SELL ANYWAY');
-    return;
-  }
+  if (!dayGate(acctStart)) return;
   pinAsk('Owner PIN — authorise credit', pin => {
     if (pin === (localStorage.getItem('mc_pin') || '2026')){
       acctPick = {name:'', phone:''}; view = 'acct'; render();
@@ -721,6 +790,10 @@ function receiptText(s){
   }
   L.push(div);
   L.push(rPad('TOTAL', fmt(s.total)));
+  if (s.tendered != null){                       // cash sales record what was handed over
+    L.push(rPad('CASH TENDERED', fmt(s.tendered)));
+    L.push(rPad('CHANGE', fmt(s.change || 0)));
+  }
   L.push('Paid: ' + s.pay + (s.debtor ? ' — ' + s.debtor : '') + (s.void ? '  ** VOIDED **' : ''));
   L.push(div);
   if (shop.footer) L.push(rCenter(shop.footer));
@@ -1206,7 +1279,8 @@ function reportsView(){
       <div class="top"><span>${s.date} ${s.time} · ${s.pay}</span><span>${fmt(s.total)}
         <button class="voidbtn" style="border-color:#607d8b;color:#607d8b" onclick="printSale(${s.id})">PRINT</button>
         ${s.void||viewMode?'':`<button class="voidbtn" onclick="voidSale(${s.id})">VOID</button>`}</span></div>
-      <div class="lines">${s.lines.map(l=>esc(l.name)+' '+l.kg.toFixed(3)+esc(l.unit.charAt(0))).join(', ')}</div>
+      <div class="lines">${s.lines.map(l=>esc(l.name)+' '+l.kg.toFixed(3)+esc(l.unit.charAt(0))).join(', ')}${
+        s.change>0.001 ? ' · tendered '+fmt(s.tendered)+', change '+fmt(s.change) : ''}</div>
     </div>`).join('');
   return head + `
     <div class="hero"><span>Takings · ${repFrom===repTo?repFrom:repFrom+' → '+repTo}</span>
