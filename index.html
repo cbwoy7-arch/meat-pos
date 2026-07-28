@@ -147,6 +147,11 @@
   .kpi { background:#fff; border-radius:14px; padding:11px 10px; text-align:center; box-shadow:var(--sh); }
   .kpi b { display:block; font-size:18px; color:var(--greend); }
   .kpi span { font-size:12px; color:var(--muted); }
+  /* a KPI that opens a report — the tap target has to look tappable on a phone */
+  .kpi.tap { cursor:pointer; border:1.5px solid #c5e1a5; }
+  .kpi.tap:active { background:#f1f8e9; }
+  .kpi.tap em { display:block; margin-top:4px; font-style:normal; font-size:11px;
+                font-weight:700; color:var(--greend); letter-spacing:.3px; }
   table { width:100%; background:#fff; border-radius:12px; border-collapse:collapse;
           overflow:hidden; box-shadow:var(--sh); font-size:14px; }
   th { background:var(--dark); color:#fff; padding:8px; text-align:left; font-size:13px; font-weight:500; }
@@ -1241,7 +1246,8 @@ function reportsView(){
       <div class="kpi"><b${cashExp>0?' style="color:#fb8c00"':''}>${fmt(cashExp)}</b><span>Cash expenses (till pay-outs)</span></div>
       <div class="kpi"><b${wasteCost>0?' style="color:#fb8c00"':''}>${fmt(wasteCost)}</b><span>Write-offs &amp; cutting loss (at cost)</span></div>
       <div class="kpi"><b>${beDay===null?'—':fmt(beDay)}</b><span>Break-even sales / day</span></div>
-      <div class="kpi"><b>${fmt(cogs)}</b><span>Cost of goods sold (reorder value)</span></div>
+      <div class="kpi tap" onclick="cogsPdf()"><b>${fmt(cogs)}</b>
+        <span>Cost of goods sold (reorder value)</span><em>TAP FOR PDF ›</em></div>
       ${shop.loan>0?`<div class="kpi"><b${afterLoan<0?' style="color:var(--red)"':''}>${fmt(afterLoan)}</b><span>After loan (${fmt(round2(loanDay))}/day financing)</span></div>`:''}
     </div>
     ${catRows?`<table style="margin-bottom:8px"><tr><th>Cash expenses by category</th><th class="n">$</th></tr>${catRows}</table>`:''}
@@ -1338,6 +1344,255 @@ function csv(){ const rows = {};   // keyed by JSON.stringify([date,name]) so a 
     ...order.map(r => [r.date, r.name, r.kg.toFixed(3), r.amt.toFixed(2),
               r.cogs.toFixed(2), (r.amt - r.cogs).toFixed(2)])];
   dl(out.map(r=>r.map(q).join(',')).join('\n'), 'pos-sales-'+repFrom+'-to-'+repTo+'.csv', 'text/csv');
+}
+// ---------------- A4 report PDFs (hand-rolled, no libraries) ----------------
+// Same byte-accurate assembly as the receipt PDF, but multi-page and A4 so a report
+// can be mailed to a supplier or filed. Text is drawn straight into a content stream:
+// Helvetica for words, Courier for figures (monospace makes columns line up exactly).
+const A4W = 595.28, A4H = 841.89, A4M = 36;                 // page box and margin, points
+// the fonts are WinAnsi-encoded, so the few typographic characters the app uses are
+// written as octal escapes; anything else outside ASCII degrades to '?' rather than
+// corrupting the stream.
+const WINANSI = {'·':'\\267', '—':'\\227', '–':'\\226', '…':'\\205', '’':'\\222', '‘':'\\221',
+                 '“':'\\223', '”':'\\224', '°':'\\260', '×':'\\327', '½':'\\275', '¼':'\\274'};
+function pEsc(s){ return String(s).replace(/[\\()]/g, m => '\\' + m)
+  .replace(/[^\x20-\x7e]/g, ch => WINANSI[ch] || '?'); }
+// Helvetica advance widths, close enough to centre a heading and truncate a product name
+function hWid(s, sz){ let w = 0;
+  for (const ch of String(s)){
+    w += ch === ' ' ? 278 : ch >= '0' && ch <= '9' ? 556
+       : ch >= 'A' && ch <= 'Z' ? ('WM'.includes(ch) ? 944 : 'IJ'.includes(ch) ? 300 : 700)
+       : ch >= 'a' && ch <= 'z' ? ('ijl'.includes(ch) ? 240 : 'mw'.includes(ch) ? 800
+                                 : 'ft'.includes(ch) ? 300 : 540) : 330;
+  }
+  return w / 1000 * sz;
+}
+function hClip(s, sz, max){ s = String(s);
+  if (hWid(s, sz) <= max) return s;
+  while (s.length > 1 && hWid(s + '…', sz) > max) s = s.slice(0, -1);
+  return s + '…';
+}
+const CW = 0.6;                                             // Courier advance, 600/1000 em
+function cWid(s, sz){ return String(s).length * CW * sz; }
+// content-stream ops. f: 1 Helvetica, 2 Helvetica-Bold, 3 Courier, 4 Courier-Bold
+function pText(x, y, s, f, sz, col){
+  return 'BT ' + (col || '0 0 0') + ' rg /F' + f + ' ' + sz + ' Tf 1 0 0 1 ' +
+    x.toFixed(2) + ' ' + y.toFixed(2) + ' Tm (' + pEsc(s) + ') Tj ET\n'; }
+function pRight(x, y, s, f, sz, col){
+  return pText(x - (f >= 3 ? cWid(s, sz) : hWid(s, sz)), y, s, f, sz, col); }
+function pCentre(x, y, s, f, sz, col){
+  return pText(x - (f >= 3 ? cWid(s, sz) : hWid(s, sz)) / 2, y, s, f, sz, col); }
+function pRect(x, y, w, h, col){
+  return col + ' rg ' + x.toFixed(2) + ' ' + y.toFixed(2) + ' ' + w.toFixed(2) + ' ' + h.toFixed(2) + ' re f\n'; }
+function pdfA4(pages, logo){
+  const objs = [];
+  const add = o => { objs.push(o); return objs.length; };
+  add(null); add(null);                                     // 1 catalog, 2 page tree
+  const fonts = ['Helvetica', 'Helvetica-Bold', 'Courier', 'Courier-Bold'].map(f =>
+    add('<< /Type /Font /Subtype /Type1 /BaseFont /' + f + ' /Encoding /WinAnsiEncoding >>'));
+  const imgId = logo ? add(['<< /Type /XObject /Subtype /Image /Width ' + logo.w + ' /Height ' + logo.h +
+    ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + logo.bytes.length +
+    ' >>\nstream\n', logo.bytes, '\nendstream']) : 0;
+  const enc = new TextEncoder(), kids = [];
+  for (const c of pages){
+    const cid = add('<< /Length ' + enc.encode(c).length + ' >>\nstream\n' + c + '\nendstream');
+    kids.push(add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + A4W.toFixed(2) + ' ' + A4H.toFixed(2) + '] ' +
+      '/Resources << /Font << ' + fonts.map((id, i) => '/F' + (i+1) + ' ' + id + ' 0 R').join(' ') + ' >>' +
+      (imgId ? ' /XObject << /Im1 ' + imgId + ' 0 R >>' : '') + ' >> /Contents ' + cid + ' 0 R >>') + ' 0 R');
+  }
+  objs[0] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objs[1] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
+  const parts = []; let off = 0;
+  const push = s => { const b = typeof s === 'string' ? enc.encode(s) : s; parts.push(b); off += b.length; };
+  push('%PDF-1.4\n');
+  const offs = [];
+  objs.forEach((o, i) => { offs.push(off); push((i + 1) + ' 0 obj\n');
+    for (const p of (Array.isArray(o) ? o : [o])) push(p); push('\nendobj\n'); });
+  const xref = off;
+  push('xref\n0 ' + (objs.length + 1) + '\n0000000000 65535 f \n' +
+    offs.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('') +
+    'trailer\n<< /Size ' + (objs.length + 1) + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF');
+  return new Blob(parts, {type:'application/pdf'});
+}
+// ---------------- cost of goods sold / reorder report ----------------
+const INK = '0.16 0.20 0.21', GREY = '0.45 0.50 0.51', GREEN = '0.36 0.55 0.15',
+      RED  = '0.78 0.21 0.19', AMBER = '0.83 0.47 0.09',
+      BAND = '0.18 0.23 0.25', ZEBRA = '0.960 0.973 0.953', PALE = '0.863 0.929 0.784';
+function money(n){ const s = Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return (n < 0 ? '-$' : '$') + s; }
+function longDate(d){ const t = new Date(d + 'T00:00');
+  return isNaN(t) ? d : t.getDate() + ' ' +
+    ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][t.getMonth()] + ' ' + t.getFullYear(); }
+// one row per product sold in the range, dearest-to-replace first — that is buying order
+function cogsRows(){ const a = agg();
+  return Object.keys(a).map(n => { const p = products.find(x => x.name === n);
+    const r = a[n];
+    // kept unrounded so the report's total is the same cent as the P&L pill that opened it
+    return {name:n, unit:p ? p.unit : 'kg', cat:(p && p.cat) || 'Other', qty:r.kg, cost:r.cogs,
+            amt:r.amt, unitCost:r.kg > 0 ? r.cogs / r.kg : 0, profit:r.amt - r.cogs,
+            onHand:p ? onHand(p) : null, low:(p && p.low) || 0, gone:!p};
+  }).filter(r => r.qty > 0.0005 || r.amt > 0.005).sort((x, y) => y.cost - x.cost || y.amt - x.amt);
+}
+function cogsPdf(){ const rows = cogsRows();
+  if (!rows.length){ toast('No sales in this range — nothing to cost', true); return; }
+  logoJpeg().then(logo => cogsBuild(rows, logo)).catch(() => cogsBuild(rows, null));
+}
+function cogsBuild(rows, logo){
+  const totCost = round2(rows.reduce((s, r) => s + r.cost, 0));
+  const totAmt  = round2(rows.reduce((s, r) => s + r.amt, 0));
+  const gp = round2(totAmt - totCost), marg = totAmt > 0 ? gp / totAmt : null;
+  const days = Math.max(1, Math.round((new Date(repTo) - new Date(repFrom)) / 86400000) + 1);
+  const nSales = rangeSales().filter(s => !s.void).length;
+  const maxCost = Math.max(...rows.map(r => r.cost), 0.01);
+  const X = {name:A4M, qty:250, unit:312, cost:388, take:456, prof:520, marg:A4W - A4M};
+  const pages = []; let ops = [], y = 0, pageNo = 0;
+  const flush = () => { if (ops.length) pages.push(ops); };
+  const bigHead = () => {
+    const top = A4H - A4M;
+    const ih = logo ? Math.min(40, 78 * logo.h / logo.w) : 0, iw = logo ? ih * logo.w / logo.h : 0;
+    if (logo) ops.push('q ' + iw.toFixed(2) + ' 0 0 ' + ih.toFixed(2) + ' ' + A4M + ' ' +
+      (top - ih).toFixed(2) + ' cm /Im1 Do Q\n');
+    const tx = A4M + (logo ? iw + 12 : 0);
+    ops.push(pText(tx, top - 13, shop.name.toUpperCase(), 2, 14, INK));
+    if (shop.line2) ops.push(pText(tx, top - 25, shop.line2, 1, 8.5, GREY));
+    ops.push(pRight(A4W - A4M, top - 13, 'COST OF GOODS SOLD', 2, 14, INK));
+    ops.push(pRight(A4W - A4M, top - 25, 'restock value of everything sold', 1, 8.5, GREY));
+    y = top - Math.max(ih, 30) - 10;
+    ops.push(pRect(A4M, y, A4W - 2*A4M, 1.4, BAND));
+    y -= 16;
+    const range = repFrom === repTo ? longDate(repFrom) : longDate(repFrom) + '  to  ' + longDate(repTo);
+    ops.push(pText(A4M, y, range, 2, 10.5, INK));
+    ops.push(pRight(A4W - A4M, y, days + ' day' + (days === 1 ? '' : 's') + ' · ' + nSales +
+      ' sale' + (nSales === 1 ? '' : 's') + ' · ' + rows.length + ' product lines', 1, 9, GREY));
+    y -= 18;
+    // summary strip
+    const cards = [['COST OF GOODS SOLD', money(totCost), GREEN], ['TAKINGS', money(totAmt), INK],
+                   ['GROSS PROFIT', money(gp), gp < 0 ? RED : GREEN],
+                   ['MARGIN', marg === null ? '—' : Math.round(marg*100) + '%', gp < 0 ? RED : INK]];
+    const cw = (A4W - 2*A4M - 3*8) / 4, ch = 46;
+    cards.forEach(([lab, val, col], i) => {
+      const cx = A4M + i*(cw + 8);
+      ops.push(pRect(cx, y - ch, cw, ch, ZEBRA));
+      ops.push(pRect(cx, y - ch, cw, 2, i === 0 ? PALE : ZEBRA));
+      ops.push(pCentre(cx + cw/2, y - 18, lab, 2, 6.8, GREY));
+      ops.push(pCentre(cx + cw/2, y - 36, val, 4, 13, col));
+    });
+    y -= ch + 12;
+    ops.push(pText(A4M, y, 'What it would cost to put back on the counter everything that was sold in this', 1, 8.5, GREY));
+    ops.push(pText(A4M, y - 10, 'period. Priced at each line\'s cost price in Items — the same figure the P&L uses.', 1, 8.5, GREY));
+    y -= 26;
+  };
+  const smallHead = () => { y = A4H - A4M - 4;
+    ops.push(pText(A4M, y, shop.name.toUpperCase() + ' · cost of goods sold', 2, 9, GREY));
+    ops.push(pRight(A4W - A4M, y, repFrom === repTo ? repFrom : repFrom + ' → ' + repTo, 1, 9, GREY));
+    y -= 8; ops.push(pRect(A4M, y, A4W - 2*A4M, 0.7, PALE)); y -= 18;
+  };
+  const colHead = () => {
+    ops.push(pRect(A4M, y - 4, A4W - 2*A4M, 16, BAND));
+    const w = '1 1 1';
+    ops.push(pText(X.name + 4, y, 'PRODUCT', 2, 7.5, w));
+    ops.push(pRight(X.qty, y, 'SOLD', 2, 7.5, w));
+    ops.push(pRight(X.unit, y, 'COST / UNIT', 2, 7.5, w));
+    ops.push(pRight(X.cost, y, 'COST OF SOLD', 2, 7.5, w));
+    ops.push(pRight(X.take, y, 'TAKINGS', 2, 7.5, w));
+    ops.push(pRight(X.prof, y, 'PROFIT', 2, 7.5, w));
+    ops.push(pRight(X.marg - 4, y, 'MARGIN', 2, 7.5, w));
+    y -= 20;
+  };
+  const newPage = (withCols) => { flush(); ops = []; pageNo++;
+    if (pageNo === 1) bigHead(); else smallHead();
+    if (withCols) colHead(); };
+  const need = (h, withCols) => { if (y - h < A4M + 24) newPage(withCols !== false); };
+  newPage(true);
+  rows.forEach((r, i) => {
+    need(17);
+    const rh = 17;
+    if (i % 2) ops.push(pRect(A4M, y - 5, A4W - 2*A4M, rh, ZEBRA));
+    const flag = r.low > 0 && r.onHand !== null && r.onHand <= r.low;
+    ops.push(pText(X.name + 4, y, hClip((flag ? '! ' : '') + r.name, 9, X.qty - X.name - 60), 1, 9, flag ? AMBER : INK));
+    // share-of-cost bar under the name: where the restock money actually goes
+    const bw = Math.max(1, (X.qty - X.name - 56) * (r.cost / maxCost));
+    ops.push(pRect(X.name + 4, y - 6.5, bw, 2.2, PALE));
+    ops.push(pRight(X.qty, y, r.qty.toFixed(3) + ' ' + r.unit, 3, 8.5, INK));
+    ops.push(pRight(X.unit, y, money(r.unitCost), 3, 8.5, GREY));
+    ops.push(pRight(X.cost, y, money(r.cost), 4, 8.5, INK));
+    ops.push(pRight(X.take, y, money(r.amt), 3, 8.5, INK));
+    ops.push(pRight(X.prof, y, money(r.profit), 3, 8.5, r.profit < 0 ? RED : GREEN));
+    ops.push(pRight(X.marg - 4, y, r.amt > 0 ? Math.round(r.profit / r.amt * 100) + '%' : '—', 3, 8.5,
+      r.profit < 0 ? RED : GREY));
+    y -= rh;
+  });
+  // totals
+  need(26);
+  y -= 2; ops.push(pRect(A4M, y + 9, A4W - 2*A4M, 0.9, BAND)); y -= 4;
+  ops.push(pText(X.name + 4, y, 'TOTAL', 2, 9.5, INK));
+  // no quantity total: kg and trays don't add up to anything a butcher can use
+  ops.push(pRight(X.cost, y, money(totCost), 4, 9.5, GREEN));
+  ops.push(pRight(X.take, y, money(totAmt), 4, 8.5, INK));
+  ops.push(pRight(X.prof, y, money(gp), 4, 8.5, gp < 0 ? RED : GREEN));
+  ops.push(pRight(X.marg - 4, y, marg === null ? '—' : Math.round(marg*100) + '%', 4, 8.5, INK));
+  y -= 26;
+  // by category — how the restock money splits across the counter
+  const byCat = {};
+  for (const r of rows){ byCat[r.cat] = byCat[r.cat] || {cost:0, amt:0};
+    byCat[r.cat].cost += r.cost; byCat[r.cat].amt += r.amt; }
+  const cats = Object.entries(byCat).sort((a, b) => b[1].cost - a[1].cost);
+  if (cats.length > 1){
+    need(30, false);
+    ops.push(pText(A4M, y, 'RESTOCK MONEY BY CATEGORY', 2, 9, INK)); y -= 14;
+    for (const [c, v] of cats){
+      need(14, false);
+      const share = totCost > 0 ? v.cost / totCost : 0;
+      ops.push(pText(A4M + 4, y, hClip(c, 9, 120), 1, 9, INK));
+      ops.push(pRect(A4M + 132, y - 1, Math.max(1, 150 * share), 6, PALE));
+      ops.push(pRight(X.cost, y, money(v.cost), 3, 8.5, INK));
+      ops.push(pRight(X.take, y, Math.round(share*100) + '% of restock', 1, 8.5, GREY));
+      ops.push(pRight(X.marg - 4, y, 'sold ' + money(v.amt), 1, 8.5, GREY));
+      y -= 14;
+    }
+    y -= 10;
+  }
+  // reorder callout — lines that sold and are now at or below their low mark
+  const low = rows.filter(r => r.low > 0 && r.onHand !== null && r.onHand <= r.low);
+  if (low.length){
+    need(30 + low.length * 13, false);
+    ops.push(pRect(A4M, y - (14 + low.length*13) - 6, A4W - 2*A4M, 20 + low.length*13 + 6, ZEBRA));
+    ops.push(pRect(A4M, y - (14 + low.length*13) - 6, 2.5, 20 + low.length*13 + 6, AMBER));
+    ops.push(pText(A4M + 10, y, 'REORDER NOW — ' + low.length + ' line' + (low.length === 1 ? '' : 's') +
+      ' at or below the low mark', 2, 9, AMBER));
+    y -= 15;
+    for (const r of low){
+      ops.push(pText(A4M + 10, y, hClip(r.name, 8.5, 150), 1, 8.5, INK));
+      ops.push(pText(A4M + 170, y, r.onHand.toFixed(3) + ' ' + r.unit + ' on hand · low mark ' +
+        r.low.toFixed(3) + ' · sold ' + r.qty.toFixed(3) + ' here', 1, 8.5, GREY));
+      ops.push(pRight(X.marg - 4, y, money(r.cost) + ' to replace', 3, 8.5, INK));
+      y -= 13;
+    }
+    y -= 14;
+  }
+  need(34, false);
+  ops.push(pText(A4M, y, 'The green rule under each product is that line\'s share of the restock money. Lines marked !', 1, 8, GREY));
+  ops.push(pText(A4M, y - 10, 'are at or below their low mark. Cost of goods sold is money the counter owes the buying float —', 1, 8, GREY));
+  ops.push(pText(A4M, y - 20, 'it is not profit. Voided sales are excluded, and change given to customers never affects it.', 1, 8, GREY));
+  flush();
+  // footers last: only now is the page count known
+  const stamp = 'Generated ' + today() + ' ' + new Date().toTimeString().slice(0, 5);
+  pages.forEach((p, i) => {
+    p.push(pRect(A4M, A4M + 12, A4W - 2*A4M, 0.6, PALE));
+    p.push(pText(A4M, A4M, stamp + ' · ' + shop.name, 1, 7.5, GREY));
+    p.push(pRight(A4W - A4M, A4M, 'Page ' + (i+1) + ' of ' + pages.length, 1, 7.5, GREY));
+  });
+  const blob = pdfA4(pages.map(p => p.join('')), logo);
+  const name = 'cost-of-goods-sold-' + repFrom + (repFrom === repTo ? '' : '-to-' + repTo) + '.pdf';
+  cogsShare(blob, name);
+}
+async function cogsShare(blob, name){
+  try {
+    const file = new File([blob], name, {type:'application/pdf'});
+    if (navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title:'Cost of goods sold'}); return; }
+  } catch(e){ if (e.name === 'AbortError') return; }        // user closed the share sheet
+  dl(blob, name, 'application/pdf'); toast('Report PDF downloaded');
 }
 // ---------------- CUTTING / BREAK DOWN (batch yield log) ----------------
 function cutView(){

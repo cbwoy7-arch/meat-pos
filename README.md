@@ -86,6 +86,15 @@ low stock, outstanding debtors — so nothing pending is buried a level down.
   loan runs, an **"after loan"** line (financing shown separately, never mixed into
   operating profit). A per-day table shows every trading day's sales, GP, overhead
   and net — loss-making days go red.
+  The **Cost of goods sold (reorder value)** tile is a button: tap it for a
+  **printable A4 PDF** covering the same date range — every product sold, dearest to
+  replace first, with kg sold, cost per unit, cost of sold, takings, profit and margin;
+  a total line that ties back to the tile to the cent; a **restock money by category**
+  split; and a **REORDER NOW** box listing the lines that are at or below their low
+  mark, with what each costs to put back. Lines already low are flagged **!** in the
+  table, and the green rule under each product name is that line's share of the restock
+  money. It shares straight to WhatsApp or email on a phone (and downloads on a
+  desktop), so it doubles as the buying list you walk into the abattoir with.
   Below that sits the **controls dashboard** for the same date range:
   till gap across the closes, missing stock at retail, cutting yield and waste,
   cutting uplift, what's owing to suppliers and owed by debtors right now, the
@@ -319,7 +328,8 @@ open that owner link once on your phone (bookmark it). Your phone gets two read-
   15 seconds.
 - **REPORTS** — the till's full Reports screen, identical cosmetics: range chips, the
   Sales / P&L / Controls sections, the break-even chart, payment split and top-products
-  graphics, Copy and CSV. It runs on the last **45 days** of records, which the till
+  graphics, Copy and CSV — including the **cost of goods sold PDF**, so the buying list
+  can be pulled off the phone away from the shop. It runs on the last **45 days** of records, which the till
   uploads within ~20 seconds of any change (bursts of sales are batched; Settings →
   **Send now** forces it). The live feed carries a revision stamp, so the viewer
   re-downloads records only when they actually changed and shows "syncing newer
