@@ -2790,8 +2790,8 @@ function adjSave(){ const p = products[adjIdx]; if (!p) return;
 }
 function stockView(){
   const avgY = batches.length ? ' · avg yield '+(Math.round(batches.reduce((s,b)=>s+b.yield,0)/batches.length*1000)/10)+'%' : '';
-  const btns = `<button class="bigbtn grey" style="margin:0 0 6px" onclick="office='issue';render()">📦 → ❄ ISSUE TO CHILLER</button>
-    <button class="bigbtn grey" style="margin:0 0 6px" onclick="office='cut';render()">🔪 CUTTING / BREAK DOWN${avgY}</button>
+  const btns = `<button class="bigbtn grey" style="margin:0 0 6px" onclick="office='cut';render()">🔪 CUTTING / BREAK DOWN${avgY}</button>
+    <button class="bigbtn grey" style="margin:0 0 6px" onclick="office='issue';render()">📦 → ❄ ISSUE TO CHILLER</button>
     <button class="bigbtn grey" style="margin:0 0 8px" onclick="office='ftake';render()">❄ FREEZER STOCK-TAKE (weekly)</button>`;
   const low = lowStock();
   const val = products.reduce((s,p) => s + Math.max(0, onHand(p)) * (p.cost||0), 0);
