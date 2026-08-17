@@ -1309,11 +1309,12 @@ function reportsView(){
 }
 function voidSale(id){
   const chk = sales.find(x=>x.id===id);
+  if (chk && chk.void){ toast('This sale is already voided', true); return; }   // no double refund of stock
   if (chk && chk.pay === 'Account' && (chk.acctPay||0) > 0.001){
     toast('This account sale already has '+fmt(chk.acctPay)+' paid against it — settle it in Debtors instead', true);
     return; }
   ask('Void this sale? It stays on record but is removed from totals.', () => {
-  const s = sales.find(x=>x.id===id); if (s) { s.void = true;
+  const s = sales.find(x=>x.id===id); if (s && !s.void) { s.void = true;   // guard again: the confirm is async
     for (const l of s.lines){ const p = products.find(x => x.name === l.name);
       if (p) p.chiller = round3((p.chiller||0) + l.kg); }    // voided goods go back in the chiller
     logAudit('void', s.date+' '+s.time+' '+s.pay+' sale '+fmt(s.total)+' — '+
