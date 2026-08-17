@@ -1,0 +1,12 @@
+{
+  "name": "meat-pos-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dev-only test tooling for Meat POS. The app itself (index.html, sw.js) has NO runtime dependencies — this file exists only so the invariant test suite can install Playwright.",
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1"
+  }
+}

@@ -1,0 +1,33 @@
+name: tests
+
+# Runs the invariant test suite (test/run.js) automatically on every pull
+# request and on every push to main, so a change can't reach the shop with a
+# broken invariant (negative stock, double-counted movements, unbalanced money).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# a newer push to the same ref cancels an in-flight run
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  invariants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Run invariant test suite
+        run: node test/run.js
