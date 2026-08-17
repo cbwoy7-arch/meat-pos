@@ -1596,7 +1596,7 @@ async function cogsShare(blob, name){
 }
 // ---------------- CUTTING / BREAK DOWN (batch yield log) ----------------
 function cutView(){
-  if (cutDraft) return cutEntry();
+  if (cutDraft) return cutDraft.step === 'split' ? cutSplit() : cutEntry();
   const cards = [...batches].reverse().slice(0,14).map(b => {
     const lowYield = b.yield < 0.95;
     return `<div class="salecard"${lowYield?' style="border-left:4px solid var(--red)"':''}>
@@ -1611,8 +1611,9 @@ function cutView(){
       <div class="note" style="margin-top:6px">This is where <b>carcass becomes products</b>:
         forequarters/hindquarters, pork sides and whole birds received through Goods In are cut
         into the item lines you sell. Weigh the piece before cutting, cut, then weigh every
-        output. Stock moves automatically: the carcass comes out of the freezer, the cuts go
-        into the chiller. Beef should return roughly <b>95%+</b> of input as saleable product
+        output. The carcass comes out of the freezer; on save you choose, line by line, how much
+        of each cut moves to the <b>chiller</b> to sell now and how much stays in the <b>freezer</b>
+        as cut stock. Beef should return roughly <b>95%+</b> of input as saleable product
         (bones and offal count) — every lost kg is money off the counter.</div>
       <button class="bigbtn" onclick="cutDraft={src:'',inKg:'',cost:'',outs:[{name:'',kg:''},{name:'',kg:''},{name:'',kg:''}]};render()">START A BATCH</button>
       <button class="bigbtn grey" onclick="office='stock';render()">‹ Back to Stock</button>
@@ -1651,7 +1652,7 @@ function cutEntry(){
       ${outRows}
       <button class="bigbtn grey" onclick="cutDraft.outs.push({name:'',kg:''});render()">+ Add another cut</button>
       <div id="cut-sum" class="note"></div>
-      <button class="bigbtn" onclick="doCut()">SAVE BATCH</button>
+      <button class="bigbtn" onclick="cutToSplit()">SAVE BATCH ›</button>
       <button class="bigbtn grey" onclick="cutDraft=null;render()">Cancel</button>
     </div>`;
 }
@@ -1688,30 +1689,110 @@ function cutSum(){
     (src && c.inKg > (src.freezer||0) + 0.001 ?
       '<br><b style="color:#fb8c00">Freezer shows only '+(src.freezer||0).toFixed(3)+' kg of '+esc(src.name)+'.</b>' : '');
 }
-function doCut(){
+// step 1 → step 2: validate the batch, then ask where each cut goes
+function cutToSplit(){
   const c = cutCalc();
   const src = products.find(p => p.name === cutDraft.src);
   if (!src){ toast('Choose the source item', true); return; }
   if (!(c.inKg > 0)){ toast('Enter the input weight', true); return; }
   if (!c.outs.length){ toast('Enter at least one output cut', true); return; }
   if (c.outKg > c.inKg){ toast('Outputs weigh more than the input — recheck the scales', true); return; }
-  if (c.outs.some(o => o.name === src.name)){
-    // selling leftover under the source's own name is fine — it just stays as source stock
+  if (round3(c.inKg) > round3(src.freezer||0) + 0.001){    // can't cut carcass that isn't in the freezer
+    toast(src.name+': freezer holds only '+(src.freezer||0).toFixed(3)+' kg, this batch needs '+
+      c.inKg.toFixed(3)+'. Receive more in Goods In, or correct the freezer figure on Items (reason logged).', true);
+    return;
   }
-  ask('Save this batch? '+c.inKg.toFixed(3)+' kg '+src.name+' → '+c.outKg.toFixed(3)+' kg of cuts ('+
-      (Math.round(c.yieldPct*1000)/10)+'% yield). Stock moves now.', () => {
+  cutDraft.chill = c.outs.map(() => '');                   // blank = stays in the freezer as cut stock (safe default)
+  cutDraft._who = cutDraft._who || localStorage.getItem('mc_lastReceiver') || '';
+  cutDraft.step = 'split';
+  render();
+}
+// per-line split of the cuts between chiller (sell now) and freezer (cut stock)
+function cutSplit(){
+  const c = cutCalc();
+  if (!cutDraft.chill || cutDraft.chill.length !== c.outs.length) cutDraft.chill = c.outs.map(() => '');
+  let totChl = 0, totFrz = 0;
+  const rows = c.outs.map((o,i) => {
+    const req = parseFloat(cutDraft.chill[i]) || 0;
+    const toChl = round3(Math.min(Math.max(req, 0), o.kg));
+    const frz = round3(o.kg - toChl);
+    const over = req > o.kg + 0.001;
+    totChl = round3(totChl + toChl); totFrz = round3(totFrz + frz);
+    return `<div class="itemrow">
+        <span style="flex:2;font-size:14px">${esc(o.name)}
+          <small style="color:#90a4ae">${o.kg.toFixed(3)} kg cut</small></span>
+        <input style="flex:1${over?';color:var(--red)':''}" type="number" inputmode="decimal" step="any"
+               placeholder="to chiller" value="${cutDraft.chill[i]}"
+               onchange="cutDraft.chill[${i}]=this.value;render()">
+      </div>
+      <div class="note" style="margin:-4px 0 6px">${over?'<b style="color:var(--red)">More than was cut. </b>':''}→ chiller ${toChl.toFixed(3)} · stays in freezer ${frz.toFixed(3)}</div>`;
+  }).join('');
+  return `<div class="icard">
+      <b style="font-size:15px">Where do these cuts go?</b>
+      <div class="note" style="margin:6px 0 10px">${esc(cutDraft.src)} → ${c.outKg.toFixed(3)} kg of cuts. For each
+        line, enter how much moves to the <b>chiller</b> (the sales counter) now. Anything left blank stays in the
+        <b>freezer</b> as cut stock — issue it later with <b>Issue to chiller</b> when you need it.</div>
+      <div class="itemrow" style="gap:8px;margin-bottom:8px">
+        <button class="bigbtn grey" style="flex:1;margin:0" onclick="cutSplitAll(true)">ALL TO CHILLER</button>
+        <button class="bigbtn grey" style="flex:1;margin:0" onclick="cutSplitAll(false)">ALL TO FREEZER</button>
+      </div>
+      ${rows}
+      <div class="note" style="margin:4px 0 8px"><b>To chiller ${totChl.toFixed(3)} kg · to freezer ${totFrz.toFixed(3)} kg</b></div>
+      ${totChl > 0 ? `<div class="itemrow" style="margin-bottom:10px">
+        <input style="flex:1;font-weight:bold" value="${esc(cutDraft._who||'')}"
+               placeholder="Received into chiller by (name) — required"
+               onchange="cutDraft._who=this.value">
+      </div>` : ''}
+      <button class="bigbtn" onclick="doCut()">CONFIRM &amp; SAVE</button>
+      <button class="bigbtn grey" onclick="cutDraft.step='entry';render()">‹ Back to the batch</button>
+    </div>`;
+}
+function cutSplitAll(toChl){
+  const c = cutCalc();
+  cutDraft.chill = c.outs.map(o => toChl ? String(o.kg) : '');
+  render();
+}
+function doCut(){
+  const c = cutCalc();
+  const src = products.find(p => p.name === cutDraft.src);
+  if (!src){ toast('Choose the source item', true); return; }
+  if (!(c.inKg > 0) || !c.outs.length){ toast('The batch is incomplete', true); return; }
+  if (round3(c.inKg) > round3(src.freezer||0) + 0.001){        // guard again — freezer may have moved since step 1
+    toast(src.name+': freezer holds only '+(src.freezer||0).toFixed(3)+' kg — cannot cut '+c.inKg.toFixed(3)+'.', true);
+    cutDraft.step = 'entry'; render(); return;
+  }
+  const chill = c.outs.map((o,i) => round3(Math.min(Math.max(parseFloat((cutDraft.chill||[])[i]) || 0, 0), o.kg)));
+  const totChl = round3(chill.reduce((s,x) => s + x, 0));
+  const totFrz = round3(c.outKg - totChl);
+  const who = String(cutDraft._who || '').trim();
+  if (totChl > 0 && !who){ toast('Enter the name of the person receiving into the chiller', true); return; }
+  const summary = totChl > 0
+    ? c.outKg.toFixed(3)+' kg cut — '+totChl.toFixed(3)+' to chiller (received by '+who+'), '+totFrz.toFixed(3)+' stays in the freezer'
+    : c.outKg.toFixed(3)+' kg cut — all stays in the freezer as cut stock';
+  ask('Save this batch? '+c.inKg.toFixed(3)+' kg '+src.name+' → '+summary+'. Stock moves now.', () => {
     src.freezer = round3((src.freezer||0) - c.inKg);              // carcass/bulk comes out of the freezer
-    for (const o of c.outs){ const p = products.find(x => x.name === o.name);
-      if (p) p.chiller = round3((p.chiller||0) + o.kg); }         // cuts go into the chiller for sale
+    const outs = c.outs.map((o,i) => {
+      const toChl = chill[i], frz = round3(o.kg - toChl);
+      const p = products.find(x => x.name === o.name);
+      if (p){ p.chiller = round3((p.chiller||0) + toChl);         // the part sent to the sales counter
+              p.freezer = round3((p.freezer||0) + frz); }         // the rest stays as cut stock in the freezer
+      if (toChl > 0)                                              // signed for, so it shows at the Close like an issue
+        logAudit('issue', o.name+' '+toChl.toFixed(3)+' kg → chiller (from cutting) — received by '+who, who);
+      return {name:o.name, kg:o.kg, price:o.price, chiller:toChl, freezer:frz};
+    });
     const b = {ts:Date.now(), date:today(), time:new Date().toTimeString().slice(0,5),
                source:src.name, inputKg:c.inKg, costKg:c.cost, inputCost:c.inputCost,
-               outs:c.outs, outKg:c.outKg, yield:round3(c.yieldPct), waste:c.waste,
-               retail:c.retail, uplift:c.uplift, abnKg:c.abnKg, abnCost:c.abnCost};
+               outs, outKg:c.outKg, yield:round3(c.yieldPct), waste:c.waste,
+               retail:c.retail, uplift:c.uplift, abnKg:c.abnKg, abnCost:c.abnCost,
+               toChiller:totChl, toFreezer:totFrz};
+    if (who) b.recv = who;
     batches.push(b);
     logAudit('cutting', src.name+' '+c.inKg.toFixed(3)+' kg → '+
       c.outs.map(o=>o.name+' '+o.kg.toFixed(3)).join(', ')+
       ' ('+(Math.round(c.yieldPct*1000)/10)+'% yield, waste '+c.waste.toFixed(3)+' kg'+
-      (c.abnCost>0 ? ', abnormal loss '+fmt(c.abnCost)+' at cost' : '')+')');
+      (c.abnCost>0 ? ', abnormal loss '+fmt(c.abnCost)+' at cost' : '')+
+      '; '+totChl.toFixed(3)+' kg to chiller, '+totFrz.toFixed(3)+' kg to freezer)');
+    if (who) localStorage.setItem('mc_lastReceiver', who);
     cutDraft = null; save(); render();
     toast(c.yieldPct < 0.95 ? 'Saved — yield below 95%, review the cutting' : 'Batch saved, stock updated');
   });
@@ -2800,8 +2881,8 @@ function stockView(){
     const isLow = p.low > 0 && onHand(p) <= p.low;
     return `<tr${isLow?' style="color:var(--red);font-weight:bold"':''}>
       <td>${esc(p.name)}${p.raw?' <small style="color:#8e24aa">carcass</small>':''}${isLow?' ⚠':''}</td>
-      <td class="n">${(p.freezer||0).toFixed(2)}</td>
-      <td class="n">${(p.chiller||0).toFixed(2)}</td>
+      <td class="n"${(p.freezer||0)<0?' style="color:var(--red);font-weight:bold"':''}>${(p.freezer||0).toFixed(2)}</td>
+      <td class="n"${(p.chiller||0)<0?' style="color:var(--red);font-weight:bold"':''}>${(p.chiller||0).toFixed(2)}</td>
       <td class="n">${fmt(Math.max(0, onHand(p)) * (p.cost||0))}</td></tr>`; }).join('');
   return `${btns}
     <div class="kpis">
@@ -2817,21 +2898,28 @@ function stockView(){
     <table><tr><th>Product</th><th class="n">Freezer</th><th class="n">Chiller</th><th class="n">Value $</th></tr>${rows}</table>
     <div class="note"><b>Freezer</b> = main store; deliveries land here. <b>Issue to chiller</b> moves
       stock to the sales counter, where the cashier is accountable for it. Sales, voids and the daily
-      <b>Close</b> touch the <b>chiller</b> only; cutting takes bulk out of the freezer and puts the
-      cuts into the chiller. Count the freezer weekly with <b>Freezer stock-take</b>. Corrections go
+      <b>Close</b> touch the <b>chiller</b> only; cutting takes bulk out of the freezer and you choose,
+      per cut, how much goes to the chiller now and how much stays in the freezer as cut stock. A figure
+      in <span style="color:var(--red);font-weight:bold">red</span> means it has gone negative — issuing
+      or cutting more than exists — fix it with a stock correction. Count the freezer weekly with
+      <b>Freezer stock-take</b>. Corrections go
       through the stock button on <b>Items</b> — pick freezer or chiller, reason required, every
       change logged. The restock alert fires on total on-hand (freezer + chiller).</div>`;
 }
 function issueView(){
   if (!issueDraft) issueDraft = {_who: localStorage.getItem('mc_lastReceiver') || ''};
-  const rows = products.map(p => p.raw ? '' :             // carcass goes through Cutting, not here
-    `<div class="itemrow">
+  const rows = products.map(p => {
+    if (p.raw) return '';                                 // carcass goes through Cutting, not here
+    const kg = parseFloat(issueDraft[p.name]);
+    const over = !isNaN(kg) && round3(kg) > round3(p.freezer||0) + 0.001;
+    return `<div class="itemrow">
       <span style="flex:2;font-size:14px">${esc(p.name)}
         <small style="color:#90a4ae">frz ${(p.freezer||0).toFixed(2)} · chl ${(p.chiller||0).toFixed(2)}</small></span>
-      <input style="flex:1" type="number" inputmode="decimal" step="any" placeholder="kg →"
+      <input style="flex:1${over?';color:var(--red)':''}" type="number" inputmode="decimal" step="any" placeholder="kg →"
              value="${issueDraft[p.name] ?? ''}"
-             onchange="issueDraft['${esc(p.name)}']=this.value">
-    </div>`).join('');
+             onchange="issueDraft['${esc(p.name)}']=this.value;render()">
+    </div>${over?`<div class="note" style="margin:-4px 0 6px"><b style="color:var(--red)">Freezer holds only ${(p.freezer||0).toFixed(3)} ${esc(p.unit)}.</b></div>`:''}`;
+  }).join('');
   return `<div class="icard">
       <b style="font-size:15px">Issue stock to the chiller</b>
       <div class="note" style="margin:6px 0 10px">Move stock from the freezer (main store) to the
@@ -2858,6 +2946,11 @@ function doIssue(){
     const kg = parseFloat(raw);
     if (isNaN(kg) || kg === 0) continue;
     if (kg < 0){ toast('Issue amounts must be positive', true); return; }
+    if (round3(kg) > round3(p.freezer||0) + 0.001){       // can't issue stock the freezer doesn't hold
+      toast(p.name+': freezer holds '+(p.freezer||0).toFixed(3)+' '+p.unit+', you asked for '+
+        round3(kg).toFixed(3)+'. Cut more stock, or correct the freezer figure on Items (reason logged).', true);
+      return;                                              // all-or-nothing — nothing moves until every line is valid
+    }
     moves.push({p, kg:round3(kg)});
   }
   if (!moves.length){ toast('Enter at least one amount to issue', true); return; }
