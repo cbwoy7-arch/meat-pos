@@ -130,15 +130,23 @@ low stock, outstanding debtors — so nothing pending is buried a level down.
     Every issue records **who received it** (name required, remembered for next time,
     written to the audit trail). From that moment that person owns it, and it's what
     the daily Close counts — each close names whoever signed for chiller stock since
-    the previous close, right next to the variances.
+    the previous close, right next to the variances. **You can't issue what the freezer
+    doesn't hold:** a line asking for more than the freezer shows turns red as you type
+    and the whole issue is refused (all-or-nothing) until every line is valid — fix it
+    by cutting more stock or correcting the freezer figure on Items.
   - **Cutting / break down** — where **carcass becomes products**: pick the raw line
     (forequarter, hindquarter, pork side, whole birds — the picker shows what the
     freezer holds), weigh it in, cut, weigh every output into the product lines. The
-    carcass comes **out of the freezer**, the cuts go **into the chiller**. Each batch
-    records **yield %, waste kg, retail uplift**; below-95% flags red; outputs can
-    never weigh more than the input (the app refuses). Carcass lines never appear on
-    the sell screen, in Issue-to-chiller, or in the chiller Close count — they exist
-    only in the freezer and the weekly freezer stock-take.
+    carcass comes **out of the freezer**. Save moves to a second step — **"where do
+    these cuts go?"** — where you split each cut between the **chiller** (to sell now)
+    and the **freezer** (kept as cut stock). Blank leaves it all in the freezer;
+    **ALL TO CHILLER** / **ALL TO FREEZER** do the whole batch in one tap. Anything
+    sent to the chiller needs a **received-by name** and is signed for exactly like an
+    Issue to chiller, so it shows at the Close. You can't cut more than the freezer
+    holds (the app refuses). Each batch records **yield %, waste kg, retail uplift**,
+    plus how it was split; below-95% flags red; outputs can never weigh more than the
+    input. Carcass lines never appear on the sell screen, in Issue-to-chiller, or in
+    the chiller Close count — they exist only in the freezer and the weekly stock-take.
   - **Freezer stock-take (weekly)** — a blind freezer count; the freezer resets to your
     counts and any shortfall is logged as a **write-off at cost** (shows in Reports).
   Sales, voids and the daily Close touch the **chiller only**; corrections go through the
