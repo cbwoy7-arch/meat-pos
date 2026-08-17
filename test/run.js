@@ -64,7 +64,8 @@ function check(name, cond, detail) {
 (async () => {
   const server = serve();
   await new Promise(r => server.listen(PORT, r));
-  const browser = await chromium.launch({ executablePath: findChrome() });
+  const browser = await chromium.launch({ executablePath: findChrome(),
+    args: ['--no-sandbox', '--disable-dev-shm-usage'] });   // needed on CI runners / small-/dev/shm containers
   const page = await browser.newPage();
   page.on('pageerror', e => console.log('  \x1b[31m[page error]\x1b[0m ' + e.message));
   await page.goto('http://localhost:' + PORT + '/index.html');
